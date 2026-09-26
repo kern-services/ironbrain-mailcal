@@ -1,0 +1,112 @@
+{
+  "defaultAccount": "assistant",
+  "accounts": {
+    "assistant": {
+      "Email": {
+        "Smtp": {
+          "Enabled": true,
+          "Host": "mail.example.com",
+          "Port": 587,
+          "UseStartTls": true,
+          "UseSsl": false,
+          "Username": "bot@example.com",
+          "Password": "REPLACE_ME",
+          "FromAddress": "bot@example.com",
+          "FromName": "Assistant Bot"
+        },
+        "Imap": {
+          "Host": "mail.example.com",
+          "Port": 993,
+          "UseSsl": true,
+          "Username": "bot@example.com",
+          "Password": "REPLACE_ME",
+          "Mailbox": "INBOX",
+          "SentFolder": "Sent"
+        }
+      },
+      "Calendar": {
+        "SourceUrl": "https://mail.example.com/SOGo/dav/bot@example.com/Calendar/personal/",
+        "HomeUrl": "https://mail.example.com/SOGo/dav/bot@example.com/Calendar/",
+        "Username": "bot@example.com",
+        "Password": "REPLACE_ME",
+        "PreferIcsFeed": false,
+        "DefaultWriteCalendar": "personal",
+        "IncludeSharedByDefault": true,
+        "Calendars": []
+      }
+    },
+    "family-cal": {
+      "Email": {
+        "Smtp": {
+          "Enabled": false,
+          "Host": "mail.example.com",
+          "Port": 587,
+          "UseStartTls": true,
+          "UseSsl": false,
+          "Username": "user@example.com",
+          "Password": "REPLACE_ME",
+          "FromAddress": "user@example.com",
+          "FromName": "Calendar User"
+        },
+        "Imap": {
+          "Host": "mail.example.com",
+          "Port": 993,
+          "UseSsl": true,
+          "Username": "user@example.com",
+          "Password": "REPLACE_ME",
+          "Mailbox": "INBOX",
+          "SentFolder": "Sent"
+        }
+      },
+      "Calendar": {
+        "SourceUrl": "https://mail.example.com/SOGo/dav/user@example.com/Calendar/personal/",
+        "HomeUrl": "https://mail.example.com/SOGo/dav/user@example.com/Calendar/",
+        "Username": "user@example.com",
+        "Password": "REPLACE_ME",
+        "PreferIcsFeed": false,
+        "DefaultWriteCalendar": "personal",
+        "IncludeSharedByDefault": true,
+        "Calendars": [
+          {
+            "name": "Family",
+            "url": "https://mail.example.com/SOGo/dav/user@example.com/Calendar/Family/"
+          },
+          {
+            "name": "personal",
+            "url": "https://mail.example.com/SOGo/dav/user@example.com/Calendar/personal/"
+          }
+        ]
+      }
+    },
+    "privat": {
+      "Email": {
+        "Smtp": {
+          "Enabled": false,
+          "Host": "mail.example.com",
+          "Port": 587,
+          "UseStartTls": true,
+          "UseSsl": false,
+          "Username": "me@example.com",
+          "Password": "REPLACE_ME",
+          "FromAddress": "me@example.com",
+          "FromName": "Private"
+        },
+        "Imap": {
+          "Host": "mail.example.com",
+          "Port": 993,
+          "UseSsl": true,
+          "Username": "me@example.com",
+          "Password": "REPLACE_ME",
+          "Mailbox": "INBOX",
+          "SentFolder": "Sent"
+        }
+      },
+      "Calendar": {
+        "SourceUrl": "",
+        "Username": "",
+        "Password": "",
+        "PreferIcsFeed": false
+      }
+    }
+  }
+}

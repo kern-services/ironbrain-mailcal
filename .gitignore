@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets & local config
+.secrets/
+.config/
+*.env
+.env.*
+**/mailcal.json
+**/appsettings.mailcal.json
+Ironbrain.MailCal.Cli/appsettings.json
+Ironbrain.MailCal.Mcp/appsettings.json
+
+# .NET
+bin/
+obj/
+/packages/
+*.user
+*.suo
+artifacts/
+coverage/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.iml

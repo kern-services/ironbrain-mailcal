@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ironbrain-mailcal-mcp": {
+      "command": "ironbrain-mailcal-mcp",
+      "env": {
+        "IRONBRAIN_MAILCAL_CONFIG": "${HOME}/.config/ironbrain/mailcal.json"
+      }
+    }
+  }
+}

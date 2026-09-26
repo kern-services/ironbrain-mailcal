@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ironbrain-mailcal",
+  "version": "0.1.2",
+  "description": "Ironbrain MailCal — self-hosted IMAP/SMTP/CalDAV for bots (CLI + MCP).",
+  "author": {
+    "name": "kern-services"
+  },
+  "license": "MIT",
+  "homepage": "https://www.ironbrain.de/mailcal/",
+  "repository": "https://github.com/kern-services/ironbrain-mailcal"
+}

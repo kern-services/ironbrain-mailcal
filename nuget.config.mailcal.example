@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Example NuGet.config for bot hosts that need the optional GitHub Packages
+  secondary feed for Ironbrain.MailCal.*.
+
+  Prefer nuget.org (no auth):
+    dotnet tool install -g Ironbrain.MailCal.Cli
+    dotnet tool install -g Ironbrain.MailCal.Mcp
+
+  Do NOT commit a copy that embeds a real PAT.
+
+  Usage (advanced only):
+    cp nuget.config.mailcal.example ~/.nuget/NuGet/NuGet.Config   # or merge
+    # replace YOUR_GITHUB_USERNAME / YOUR_PAT_WITH_read_packages
+    # then: dotnet tool install -g Ironbrain.MailCal.Cli --source github-kern-services
+
+  See docs/install.md.
+-->
+<configuration>
+  <packageSources>
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
+    <add key="github-kern-services" value="https://nuget.pkg.github.com/kern-services/index.json" />
+  </packageSources>
+  <packageSourceCredentials>
+    <github-kern-services>
+      <add key="Username" value="YOUR_GITHUB_USERNAME" />
+      <add key="ClearTextPassword" value="YOUR_PAT_WITH_read_packages" />
+    </github-kern-services>
+  </packageSourceCredentials>
+</configuration>
