@@ -64,7 +64,7 @@ dotnet tool install -g Ironbrain.MailCal.Mcp
 export IRONBRAIN_MAILCAL_CONFIG="$HOME/.config/ironbrain/mailcal.json"
 ```
 
-Then point Cursor at this repo / plugin, or merge the `mcp.json` snippet into your MCP settings. Submission checklist: [docs/cursor-directory.md](docs/cursor-directory.md).
+Then point Cursor at this repo / plugin, or merge the `mcp.json` snippet into your MCP settings. This public repo is the cursor.directory submission target — checklist: [docs/cursor-directory.md](docs/cursor-directory.md).
 
 ## Build from source
 
