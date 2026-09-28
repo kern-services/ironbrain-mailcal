@@ -35,7 +35,7 @@ chmod 600 ~/.config/ironbrain/mailcal.json
 ironbrain-mailcal account list
 ironbrain-mailcal -a assistant mail list --limit 5
 ironbrain-mailcal -a personal mail move <uid> --to Archive/2026
-ironbrain-mailcal -a personal mail archive <uid>   # needs Email.Imap.ArchiveFolder e.g. Archive/{YYYY}
+ironbrain-mailcal -a personal mail archive <uid>   # default Archive/{CurrentYear} when ArchiveFolder unset
 ironbrain-mailcal -a family-cal cal calendars
 ```
 
@@ -45,7 +45,7 @@ Prefer an `accounts` map with `defaultAccount`. Select with `--account` / `-a` o
 
 ## IMAP archive folders
 
-Set `Email.Imap.ArchiveFolder` per account (e.g. `Archive/{YYYY}` — common on mox-style year folders). Placeholders `{YYYY}`, `{MM}`, `{YY}`, `{DD}` expand from the message Date when available, otherwise UTC now. See [docs/cli.md](docs/cli.md).
+`Email.Imap.ArchiveFolder` defaults to `Archive/{CurrentYear}` when unset/empty. `{CurrentYear}` expands from **UTC now**; `{YYYY}`, `{MM}`, `{YY}`, `{DD}` expand from the message Date when available, otherwise UTC now. See [docs/cli.md](docs/cli.md).
 
 ## SMTP send gate
 

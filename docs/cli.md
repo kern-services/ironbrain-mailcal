@@ -129,14 +129,16 @@ ironbrain-mailcal -a personal mail archive <uid>
 
 ### IMAP move / archive
 
-Configure a per-account archive target under `Email.Imap.ArchiveFolder`. Patterns may include placeholders expanded from the **message Date** when present/parseable; if Date is missing or unparseable, expansion uses **UTC now**:
+Configure an optional per-account archive target under `Email.Imap.ArchiveFolder`.
+When **unset or empty**, the default is **`Archive/{CurrentYear}`** so `mail archive` works without config.
 
-| Token | Meaning |
-|-------|---------|
-| `{YYYY}` | 4-digit year |
-| `{YY}` | 2-digit year |
-| `{MM}` | 2-digit month |
-| `{DD}` | 2-digit day |
+| Token | Meaning | Source |
+|-------|---------|--------|
+| `{CurrentYear}` | 4-digit calendar year | **UTC now** (clock) — not the message Date |
+| `{YYYY}` | 4-digit year | Message Date when present/parseable; else **UTC now** |
+| `{YY}` | 2-digit year | Message Date when present/parseable; else **UTC now** |
+| `{MM}` | 2-digit month | Message Date when present/parseable; else **UTC now** |
+| `{DD}` | 2-digit day | Message Date when present/parseable; else **UTC now** |
 
 Examples (mox-style **singular** `Archive` year folders are common):
 
@@ -144,18 +146,18 @@ Examples (mox-style **singular** `Archive` year folders are common):
 "Imap": {
   "Mailbox": "INBOX",
   "SentFolder": "Sent",
-  "ArchiveFolder": "Archive/{YYYY}"
+  "ArchiveFolder": "Archive/{CurrentYear}"
 }
 ```
 
-Also valid: `Archive/{YYYY}/{MM}/`.
+Also valid: `Archive/{YYYY}` (year from message Date) or `Archive/{YYYY}/{MM}/`.
 
 ```bash
 # Explicit destination
 ironbrain-mailcal -a personal mail move <uid> --to Archive/2026
 ironbrain-mailcal -a personal mail move <uid> --to Archive/2026 --mailbox INBOX
 
-# Uses Email:Imap:ArchiveFolder (fails clearly if unset)
+# Uses Email:Imap:ArchiveFolder (default Archive/{CurrentYear} when unset)
 ironbrain-mailcal -a personal mail archive <uid>
 ```
 
@@ -223,7 +225,7 @@ Example Cursor MCP config snippet:
 }
 ```
 
-Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; `add_appointment` accepts `calendar` (name/id) and never writes to all calendars. `move_email` / `archive_email` mirror the CLI (UID MOVE with COPY+DELETE fallback; archive uses `Email:Imap:ArchiveFolder`).
+Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; `add_appointment` accepts `calendar` (name/id) and never writes to all calendars. `move_email` / `archive_email` mirror the CLI (UID MOVE with COPY+DELETE fallback; archive uses `Email:Imap:ArchiveFolder`, default `Archive/{CurrentYear}`).
 
 ## MVP gaps (intentional)
 

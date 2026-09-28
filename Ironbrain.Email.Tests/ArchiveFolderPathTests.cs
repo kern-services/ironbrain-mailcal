@@ -41,9 +41,46 @@ public class ArchiveFolderPathTests
     }
 
     [Fact]
-    public void Expand_EmptyPattern_Throws()
+    public void Expand_CurrentYear_UsesUtcClock_IndependentOfMessageDate()
     {
-        Assert.Throws<ArgumentException>(() => ArchiveFolderPath.Expand("  ", SampleDate));
+        // Message date is 2026; clock is 2099 — {CurrentYear} must follow the clock (UTC now), not Date.
+        var actual = ArchiveFolderPath.Expand("Archive/{CurrentYear}", SampleDate, FallbackUtc);
+        Assert.Equal("Archive/2099", actual);
+    }
+
+    [Fact]
+    public void Expand_CurrentYear_CaseInsensitive()
+    {
+        var actual = ArchiveFolderPath.Expand("Archive/{currentyear}", SampleDate, FallbackUtc);
+        Assert.Equal("Archive/2099", actual);
+    }
+
+    [Fact]
+    public void Expand_CurrentYear_AndYyyy_CanDiffer()
+    {
+        var actual = ArchiveFolderPath.Expand(
+            "Archive/{CurrentYear}/from-{YYYY}",
+            SampleDate,
+            FallbackUtc);
+        Assert.Equal("Archive/2099/from-2026", actual);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Expand_EmptyOrUnset_DefaultsToArchiveCurrentYear(string? pattern)
+    {
+        var actual = ArchiveFolderPath.Expand(pattern, SampleDate, FallbackUtc);
+        Assert.Equal("Archive/2099", actual);
+        Assert.Equal(ArchiveFolderPath.DefaultPattern, "Archive/{CurrentYear}");
+    }
+
+    [Fact]
+    public void Expand_Yyyy_StillFollowsMessageDate_WhenPresent()
+    {
+        var actual = ArchiveFolderPath.Expand("Archive/{YYYY}", SampleDate, FallbackUtc);
+        Assert.Equal("Archive/2026", actual);
     }
 
     [Fact]
@@ -56,5 +93,11 @@ public class ArchiveFolderPathTests
     public void ResolveDate_NullFallsBack()
     {
         Assert.Equal(FallbackUtc, ArchiveFolderPath.ResolveDate(null, FallbackUtc));
+    }
+
+    [Fact]
+    public void ImapOptions_DefaultArchiveFolder_IsCurrentYearPattern()
+    {
+        Assert.Equal(ArchiveFolderPath.DefaultPattern, new ImapOptions().ArchiveFolder);
     }
 }

@@ -22,9 +22,9 @@ public interface IEmailService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Moves a message by IMAP UID into the configured <see cref="ImapOptions.ArchiveFolder"/>
-    /// (placeholders expanded from the message Date, else UTC now).
-    /// Fails if ArchiveFolder is not configured.
+    /// Moves a message by IMAP UID into <see cref="ImapOptions.ArchiveFolder"/>
+    /// (default <c>Archive/{CurrentYear}</c> when unset/empty).
+    /// <c>{CurrentYear}</c> expands from UTC now; other date tokens from message Date, else UTC now.
     /// </summary>
     Task<EmailMoveResult> ArchiveEmailAsync(
         string id,

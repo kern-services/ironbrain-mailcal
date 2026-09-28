@@ -33,10 +33,12 @@ public sealed class ImapOptions
     /// <summary>IMAP folder for sent messages (e.g. "Sent", "Sent Items", "INBOX.Sent"). If empty, sent copies are not saved.</summary>
     public string SentFolder { get; set; } = "Sent";
     /// <summary>
-    /// IMAP archive mailbox pattern for <c>mail archive</c> (e.g. <c>Archive/{YYYY}</c> or <c>Archive/{YYYY}/{MM}/</c>).
-    /// Placeholders expand from the message Date when available; otherwise UTC now. Empty = archive not configured.
+    /// IMAP archive mailbox pattern for <c>mail archive</c> (default <c>Archive/{CurrentYear}</c>).
+    /// Unset or empty uses the default so archive works without config.
+    /// <c>{CurrentYear}</c> expands from UTC now; <c>{YYYY}</c>/<c>{YY}</c>/<c>{MM}</c>/<c>{DD}</c>
+    /// expand from the message Date when available, otherwise UTC now.
     /// </summary>
-    public string ArchiveFolder { get; set; } = string.Empty;
+    public string ArchiveFolder { get; set; } = ArchiveFolderPath.DefaultPattern;
 }
 
 

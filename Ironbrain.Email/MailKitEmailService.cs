@@ -212,12 +212,6 @@ public sealed class MailKitEmailService(
         CancellationToken cancellationToken = default)
     {
         var (_, imap) = await GetOptionsAsync(userId, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(imap.ArchiveFolder))
-        {
-            throw new InvalidOperationException(
-                "Archive folder is not configured. Set Email:Imap:ArchiveFolder "
-                + "(e.g. \"Archive/{YYYY}\" for mox-style year folders) for this account.");
-        }
 
         var sourceName = string.IsNullOrWhiteSpace(sourceMailbox) ? imap.Mailbox : sourceMailbox.Trim();
         var uid = ParseUid(id);
@@ -239,6 +233,7 @@ public sealed class MailKitEmailService(
         if (messageDate is null || messageDate == DateTimeOffset.MinValue)
             messageDate = null; // fall back to UTC now per ArchiveFolderPath rules
 
+        // Empty/unset ArchiveFolder → Archive/{CurrentYear} inside Expand
         var destPattern = ArchiveFolderPath.Expand(imap.ArchiveFolder, messageDate);
         var destination = await GetOrCreateMailboxAsync(client, destPattern, cancellationToken).ConfigureAwait(false);
         var method = client.Capabilities.HasFlag(ImapCapabilities.Move) ? "MOVE" : "COPY+DELETE";

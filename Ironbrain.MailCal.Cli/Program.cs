@@ -244,7 +244,7 @@ mailMove.SetAction(async (parseResult, ct) =>
 mail.Subcommands.Add(mailMove);
 
 var archiveUidArg = new Argument<string>("uid") { Description = "IMAP unique id (UID) of the message to archive" };
-var mailArchive = new Command("archive", "Move a message into Email:Imap:ArchiveFolder (placeholders expanded from message Date)");
+var mailArchive = new Command("archive", "Move a message into Email:Imap:ArchiveFolder (default Archive/{CurrentYear}; {CurrentYear}=UTC now, other tokens=message Date)");
 mailArchive.Arguments.Add(archiveUidArg);
 mailArchive.Options.Add(mailboxOpt);
 mailArchive.SetAction(async (parseResult, ct) =>

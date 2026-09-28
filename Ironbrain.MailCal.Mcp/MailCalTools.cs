@@ -109,7 +109,7 @@ public sealed class MailCalTools(
     }
 
     [McpServerTool(Name = "archive_email")]
-    [Description("Archives a message by IMAP UID into Email:Imap:ArchiveFolder (e.g. Archive/{YYYY}). Placeholders expand from the message Date, else UTC now. Fails if ArchiveFolder is not configured.")]
+    [Description("Archives a message by IMAP UID into Email:Imap:ArchiveFolder (default Archive/{CurrentYear} when unset). {CurrentYear} expands from UTC now; {YYYY}/{MM}/{YY}/{DD} from message Date, else UTC now.")]
     public async Task<string> ArchiveEmailAsync(
         [Description("IMAP unique id (UID)")] string uid,
         [Description("Optional source mailbox override (default: account Imap.Mailbox / INBOX)")] string? mailbox = null,
