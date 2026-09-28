@@ -43,7 +43,7 @@ ironbrain-mailcal-mcp
 }
 ```
 
-Tools include `list_accounts`, `list_emails`, `get_email`, `send_email`, `list_calendars`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` (optional `account` on each).
+Tools include `list_accounts`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `list_calendars`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` (optional `account` on each). `archive_email` requires `Email:Imap:ArchiveFolder` (e.g. `Archive/{YYYY}`).
 
 Full install and config: [docs/install.md](https://github.com/kern-services/ironbrain-mailcal/blob/main/docs/install.md). Design reference: [docs/cli.md](https://github.com/kern-services/ironbrain-mailcal/blob/main/docs/cli.md).
 

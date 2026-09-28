@@ -201,6 +201,34 @@ public class AccountCatalogTests
         Assert.Contains(summaries, s => s.Name == "privat" && !s.SmtpSendEnabled);
     }
 
+  [Fact]
+    public void ArchiveFolder_BindsAndClones()
+    {
+        var config = Build("""
+            {
+              "accounts": {
+                "personal": {
+                  "Email": {
+                    "Imap": {
+                      "Host": "imap.example.com",
+                      "Mailbox": "INBOX",
+                      "ArchiveFolder": "Archive/{YYYY}"
+                    },
+                    "Smtp": { "Host": "smtp.example.com", "Enabled": false }
+                  }
+                }
+              }
+            }
+            """);
+        var catalog = AccountCatalog.FromConfiguration(config);
+        var resolved = catalog.Resolve("personal", config);
+        Assert.Equal("Archive/{YYYY}", resolved.Imap.ArchiveFolder);
+
+        resolved.Imap.ArchiveFolder = "Changed";
+        var again = catalog.Resolve("personal", config);
+        Assert.Equal("Archive/{YYYY}", again.Imap.ArchiveFolder);
+    }
+
     private static IConfiguration Build(string json)
     {
         var path = Path.Combine(Path.GetTempPath(), "mailcal-test-" + Guid.NewGuid().ToString("N") + ".json");

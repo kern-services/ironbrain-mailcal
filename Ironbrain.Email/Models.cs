@@ -27,4 +27,14 @@ public sealed class EmailSendRequest
     public string? HtmlBody { get; set; }
 }
 
+/// <summary>Result of an IMAP UID move or archive.</summary>
+public sealed class EmailMoveResult
+{
+    public required string Id { get; set; }
+    public required string FromMailbox { get; set; }
+    public required string ToMailbox { get; set; }
+    /// <summary><c>MOVE</c> when the server supports IMAP MOVE; otherwise <c>COPY+DELETE</c>.</summary>
+    public required string Method { get; set; }
+}
+
 
