@@ -87,6 +87,47 @@ public sealed class MailCalTools(
         return $"Sent email to {to} with subject '{subject}' (account={resolved.Name}).";
     }
 
+    [McpServerTool(Name = "move_email")]
+    [Description("Moves a message by IMAP UID to a destination mailbox. Prefers UID MOVE; falls back to COPY+\\Deleted+EXPUNGE. Creates the destination folder when the server allows.")]
+    public async Task<string> MoveEmailAsync(
+        [Description("IMAP unique id (UID)")] string uid,
+        [Description("Destination IMAP mailbox (e.g. Archive/2026)")] string toMailbox,
+        [Description("Optional source mailbox override (default: account Imap.Mailbox / INBOX)")] string? mailbox = null,
+        [Description("Optional account name")] string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (email, _, resolved) = Create(account, mailbox);
+        var result = await email.MoveEmailAsync(uid, toMailbox, sourceMailbox: null, userId: null, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            result.Id,
+            result.FromMailbox,
+            result.ToMailbox,
+            result.Method,
+            account = resolved.Name
+        }, JsonOptions);
+    }
+
+    [McpServerTool(Name = "archive_email")]
+    [Description("Archives a message by IMAP UID into Email:Imap:ArchiveFolder (e.g. Archive/{YYYY}). Placeholders expand from the message Date, else UTC now. Fails if ArchiveFolder is not configured.")]
+    public async Task<string> ArchiveEmailAsync(
+        [Description("IMAP unique id (UID)")] string uid,
+        [Description("Optional source mailbox override (default: account Imap.Mailbox / INBOX)")] string? mailbox = null,
+        [Description("Optional account name")] string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (email, _, resolved) = Create(account, mailbox);
+        var result = await email.ArchiveEmailAsync(uid, sourceMailbox: null, userId: null, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            result.Id,
+            result.FromMailbox,
+            result.ToMailbox,
+            result.Method,
+            account = resolved.Name
+        }, JsonOptions);
+    }
+
     [McpServerTool(Name = "get_appointments_for_day")]
     [Description("Gets calendar appointments for a day. Default: all discovered calendars for the account. Each appointment includes calendarName/calendarId.")]
     public async Task<string> GetAppointmentsForDayAsync(
@@ -147,8 +188,13 @@ public sealed class MailCalTools(
         }, userId: null, cancellationToken);
     }
 
-    private (IEmailService Email, ICalendarService Calendar, ResolvedAccount Account) Create(string? account) =>
-        clientFactory.Create(catalog.Resolve(account, configuration));
+    private (IEmailService Email, ICalendarService Calendar, ResolvedAccount Account) Create(string? account, string? mailboxOverride = null)
+    {
+        var resolved = catalog.Resolve(account, configuration);
+        if (!string.IsNullOrWhiteSpace(mailboxOverride))
+            resolved.Imap.Mailbox = mailboxOverride;
+        return clientFactory.Create(resolved);
+    }
 
     private static CalendarQueryOptions BuildQuery(string? calendarUrl, string? calendars, bool? includeShared)
     {

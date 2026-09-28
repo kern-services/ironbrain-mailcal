@@ -2,6 +2,7 @@
   <Project Path="Ironbrain.Calendar\Ironbrain.Calendar.csproj" />
   <Project Path="Ironbrain.Calendar.Tests\Ironbrain.Calendar.Tests.csproj" />
   <Project Path="Ironbrain.Email\Ironbrain.Email.csproj" />
+  <Project Path="Ironbrain.Email.Tests\Ironbrain.Email.Tests.csproj" />
   <Project Path="Ironbrain.MailCal\Ironbrain.MailCal.csproj" />
   <Project Path="Ironbrain.MailCal.Tests\Ironbrain.MailCal.Tests.csproj" />
   <Project Path="Ironbrain.MailCal.Cli\Ironbrain.MailCal.Cli.csproj" />

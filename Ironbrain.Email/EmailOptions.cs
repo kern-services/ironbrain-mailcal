@@ -32,6 +32,11 @@ public sealed class ImapOptions
     public string Mailbox { get; set; } = "INBOX";
     /// <summary>IMAP folder for sent messages (e.g. "Sent", "Sent Items", "INBOX.Sent"). If empty, sent copies are not saved.</summary>
     public string SentFolder { get; set; } = "Sent";
+    /// <summary>
+    /// IMAP archive mailbox pattern for <c>mail archive</c> (e.g. <c>Archive/{YYYY}</c> or <c>Archive/{YYYY}/{MM}/</c>).
+    /// Placeholders expand from the message Date when available; otherwise UTC now. Empty = archive not configured.
+    /// </summary>
+    public string ArchiveFolder { get; set; } = string.Empty;
 }
 
 

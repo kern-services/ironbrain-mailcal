@@ -15,6 +15,10 @@ ironbrain-mailcal account show assistant   # passwords redacted
 ironbrain-mailcal -a assistant mail list --limit 5
 ironbrain-mailcal -a assistant mail get '<imap-unique-id-from-list>'
 
+# Optional: move / archive (ArchiveFolder e.g. Archive/{YYYY} for mox-style year folders)
+# ironbrain-mailcal -a personal mail move '<uid>' --to Archive/2026
+# ironbrain-mailcal -a personal mail archive '<uid>'
+
 # CalDAV discover / list
 ironbrain-mailcal -a family-cal cal calendars
 ironbrain-mailcal -a family-cal cal list --date today --range day

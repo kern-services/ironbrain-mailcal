@@ -21,7 +21,8 @@
           "Username": "bot@example.com",
           "Password": "REPLACE_ME",
           "Mailbox": "INBOX",
-          "SentFolder": "Sent"
+          "SentFolder": "Sent",
+          "ArchiveFolder": "Archive/{YYYY}"
         }
       },
       "Calendar": {
@@ -98,7 +99,8 @@
           "Username": "me@example.com",
           "Password": "REPLACE_ME",
           "Mailbox": "INBOX",
-          "SentFolder": "Sent"
+          "SentFolder": "Sent",
+          "ArchiveFolder": "Archive/{YYYY}"
         }
       },
       "Calendar": {

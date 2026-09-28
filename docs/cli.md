@@ -119,11 +119,49 @@ ironbrain-mailcal -a privat mail get <imap-unique-id>
 ironbrain-mailcal mail send --to a@b.com --subject "Hi" --body "Hello"
 ironbrain-mailcal mail send --to a@b.com --subject "Hi" --body-file ./msg.txt
 ironbrain-mailcal mail reply <imap-unique-id> --body "Thanks"
+ironbrain-mailcal -a personal mail move <uid> --to Archive/2026
+ironbrain-mailcal -a personal mail archive <uid>
 ```
 
 `send` / `reply` use SMTP only when `Email.Smtp.Enabled` is true for the selected account (default). When `Enabled` is `false`, they exit with an error naming that account.
 
 `send` also appends to the IMAP Sent folder when `Imap:SentFolder` is set (same behaviour as `Ironbrain.Email`).
+
+### IMAP move / archive
+
+Configure a per-account archive target under `Email.Imap.ArchiveFolder`. Patterns may include placeholders expanded from the **message Date** when present/parseable; if Date is missing or unparseable, expansion uses **UTC now**:
+
+| Token | Meaning |
+|-------|---------|
+| `{YYYY}` | 4-digit year |
+| `{YY}` | 2-digit year |
+| `{MM}` | 2-digit month |
+| `{DD}` | 2-digit day |
+
+Examples (mox-style **singular** `Archive` year folders are common):
+
+```json
+"Imap": {
+  "Mailbox": "INBOX",
+  "SentFolder": "Sent",
+  "ArchiveFolder": "Archive/{YYYY}"
+}
+```
+
+Also valid: `Archive/{YYYY}/{MM}/`.
+
+```bash
+# Explicit destination
+ironbrain-mailcal -a personal mail move <uid> --to Archive/2026
+ironbrain-mailcal -a personal mail move <uid> --to Archive/2026 --mailbox INBOX
+
+# Uses Email:Imap:ArchiveFolder (fails clearly if unset)
+ironbrain-mailcal -a personal mail archive <uid>
+```
+
+**MOVE behaviour:** prefers IMAP **UID MOVE**. If the server does not advertise MOVE, MailKit falls back to **COPY** + mark `\Deleted` + **EXPUNGE**. The JSON result includes `method`: `"MOVE"` or `"COPY+DELETE"`.
+
+**Missing archive mailbox:** MailCal tries to create the folder hierarchy under the personal namespace when the server allows. On success the move proceeds into the new path. If create is denied or unsupported, the command fails with a clear error asking you to create the folder manually (or grant CREATE).
 
 ### Calendar (CalDAV / iCal, multi-calendar)
 
@@ -185,7 +223,7 @@ Example Cursor MCP config snippet:
 }
 ```
 
-Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; `add_appointment` accepts `calendar` (name/id) and never writes to all calendars.
+Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; `add_appointment` accepts `calendar` (name/id) and never writes to all calendars. `move_email` / `archive_email` mirror the CLI (UID MOVE with COPY+DELETE fallback; archive uses `Email:Imap:ArchiveFolder`).
 
 ## MVP gaps (intentional)
 

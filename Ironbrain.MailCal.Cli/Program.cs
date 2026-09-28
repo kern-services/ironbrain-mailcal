@@ -62,7 +62,8 @@ accountShow.SetAction(parseResult =>
                 username = account.Imap.Username,
                 password = Redact(account.Imap.Password),
                 mailbox = account.Imap.Mailbox,
-                sentFolder = account.Imap.SentFolder
+                sentFolder = account.Imap.SentFolder,
+                archiveFolder = account.Imap.ArchiveFolder
             },
             smtp = new
             {
@@ -210,6 +211,64 @@ mailReply.SetAction(async (parseResult, ct) =>
     }
 });
 mail.Subcommands.Add(mailReply);
+
+var moveUidArg = new Argument<string>("uid") { Description = "IMAP unique id (UID) of the message to move" };
+var moveToOpt = new Option<string>("--to") { Description = "Destination IMAP mailbox (e.g. Archive/2026)" };
+moveToOpt.Validators.Add(r => { if (string.IsNullOrWhiteSpace(r.GetValueOrDefault<string>())) r.AddError("--to is required"); });
+var mailMove = new Command("move", "Move a message by IMAP UID (prefers UID MOVE; else COPY+\\Deleted+EXPUNGE)");
+mailMove.Arguments.Add(moveUidArg);
+mailMove.Options.Add(moveToOpt);
+mailMove.Options.Add(mailboxOpt);
+mailMove.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (email, _, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt);
+        var result = await email.MoveEmailAsync(
+            parseResult.GetValue(moveUidArg)!,
+            parseResult.GetValue(moveToOpt)!,
+            sourceMailbox: null,
+            userId: null,
+            ct);
+        ConfigLoader.WriteJson(new
+        {
+            result.Id,
+            result.FromMailbox,
+            result.ToMailbox,
+            result.Method,
+            account = account.Name
+        });
+    }
+});
+mail.Subcommands.Add(mailMove);
+
+var archiveUidArg = new Argument<string>("uid") { Description = "IMAP unique id (UID) of the message to archive" };
+var mailArchive = new Command("archive", "Move a message into Email:Imap:ArchiveFolder (placeholders expanded from message Date)");
+mailArchive.Arguments.Add(archiveUidArg);
+mailArchive.Options.Add(mailboxOpt);
+mailArchive.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (email, _, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt);
+        var result = await email.ArchiveEmailAsync(
+            parseResult.GetValue(archiveUidArg)!,
+            sourceMailbox: null,
+            userId: null,
+            ct);
+        ConfigLoader.WriteJson(new
+        {
+            result.Id,
+            result.FromMailbox,
+            result.ToMailbox,
+            result.Method,
+            account = account.Name
+        });
+    }
+});
+mail.Subcommands.Add(mailArchive);
 
 // ---- cal ----
 var cal = new Command("cal", "CalDAV / iCalendar operations");

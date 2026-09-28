@@ -232,7 +232,8 @@ public sealed class AccountCatalog
         Username = i.Username,
         Password = i.Password,
         Mailbox = i.Mailbox,
-        SentFolder = i.SentFolder
+        SentFolder = i.SentFolder,
+        ArchiveFolder = i.ArchiveFolder
     };
 
     private static CalendarOptions CloneCalendar(CalendarOptions c) => new()

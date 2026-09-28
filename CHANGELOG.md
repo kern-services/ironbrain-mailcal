@@ -5,6 +5,14 @@ All notable changes to **Ironbrain MailCal** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- IMAP `mail move <uid> --to <mailbox>` and `mail archive <uid>` (CLI + MCP `move_email` / `archive_email`).
+- Per-account `Email:Imap:ArchiveFolder` with `{YYYY}` / `{MM}` / `{YY}` / `{DD}` placeholders (message Date, else UTC now).
+- Prefer IMAP UID MOVE; fallback COPY + `\Deleted` + EXPUNGE; create missing archive hierarchy when allowed.
+
 ## [0.1.2] — 2026-09-26
 
 ### Changed
