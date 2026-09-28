@@ -1,3 +1,4 @@
+using Ironbrain.Email;
 using Ironbrain.MailCal;
 using Microsoft.Extensions.Configuration;
 using Xunit;
@@ -227,6 +228,29 @@ public class AccountCatalogTests
         resolved.Imap.ArchiveFolder = "Changed";
         var again = catalog.Resolve("personal", config);
         Assert.Equal("Archive/{YYYY}", again.Imap.ArchiveFolder);
+    }
+
+    [Fact]
+    public void ArchiveFolder_Omitted_UsesDefaultCurrentYearPattern()
+    {
+        var config = Build("""
+            {
+              "accounts": {
+                "personal": {
+                  "Email": {
+                    "Imap": {
+                      "Host": "imap.example.com",
+                      "Mailbox": "INBOX"
+                    },
+                    "Smtp": { "Host": "smtp.example.com", "Enabled": false }
+                  }
+                }
+              }
+            }
+            """);
+        var catalog = AccountCatalog.FromConfiguration(config);
+        var resolved = catalog.Resolve("personal", config);
+        Assert.Equal(ArchiveFolderPath.DefaultPattern, resolved.Imap.ArchiveFolder);
     }
 
     private static IConfiguration Build(string json)

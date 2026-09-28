@@ -9,7 +9,7 @@ namespace Ironbrain.Email.Tests;
 public class MailMoveArchiveWiringTests
 {
     [Fact]
-    public async Task ArchiveEmailAsync_WithoutArchiveFolder_ThrowsClearly_BeforeImap()
+    public async Task ArchiveEmailAsync_EmptyArchiveFolder_UsesDefault_StillValidatesUidBeforeImap()
     {
         var service = CreateService(new ImapOptions
         {
@@ -20,15 +20,15 @@ public class MailMoveArchiveWiringTests
             ArchiveFolder = ""
         });
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.ArchiveEmailAsync("42"));
+        // Empty ArchiveFolder no longer fails; default Archive/{CurrentYear} applies after UID parse.
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ArchiveEmailAsync("not-a-uid"));
 
-        Assert.Contains("Archive folder is not configured", ex.Message);
-        Assert.Contains("Archive/{YYYY}", ex.Message);
+        Assert.Contains("Invalid IMAP UID", ex.Message);
     }
 
     [Fact]
-    public async Task ArchiveEmailAsync_WhitespaceArchiveFolder_ThrowsClearly()
+    public async Task ArchiveEmailAsync_WhitespaceArchiveFolder_UsesDefault_StillValidatesUidBeforeImap()
     {
         var service = CreateService(new ImapOptions
         {
@@ -36,10 +36,10 @@ public class MailMoveArchiveWiringTests
             ArchiveFolder = "   "
         });
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.ArchiveEmailAsync("1"));
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ArchiveEmailAsync("bad"));
 
-        Assert.Contains("Archive folder is not configured", ex.Message);
+        Assert.Contains("Invalid IMAP UID", ex.Message);
     }
 
     [Fact]
