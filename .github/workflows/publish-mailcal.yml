@@ -102,6 +102,7 @@ jobs:
 
       - name: Push to GitHub Packages (optional secondary)
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        continue-on-error: true
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           LIB_VERSION: ${{ steps.ver.outputs.lib_version }}
