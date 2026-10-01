@@ -36,7 +36,7 @@ public sealed class MailCalTools(
         CancellationToken cancellationToken = default)
     {
         var (_, calendar, _) = Create(account);
-        var items = await calendar.ListCalendarsAsync(userId: null, includeShared, cancellationToken);
+        var items = await calendar.ListCalendarsAsync(userId: null, includeShared: includeShared, cancellationToken: cancellationToken);
         return JsonSerializer.Serialize(items, JsonOptions);
     }
 

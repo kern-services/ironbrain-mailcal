@@ -9,11 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Shared-lib reconciliation for platform consumers: `TrashFolder` / `TrashEmailAsync`, SMTP/IMAP `TimeoutMs`, `MailKitSasl` safe-auth preference, optional `mailbox` / `accountId` on list/get/send/move/archive/trash, optional `messageDate` on archive.
+- Calendar: optional `accountId` on `ListCalendarsAsync` and on query/add request models; `IUserCalendarOptionsProvider` account overload.
+- `Ironbrain.Email` / `Ironbrain.Calendar` are packable NuGet libraries (`IsPackable=true`, version `0.1.0`).
+- CI publish workflow `.github/workflows/publish-mailcal.yml` (pack tools + libs). nuget.org Trusted Publishing must be retargeted from private `ironbrain` to this repo before live publish.
+- Unit tests for SASL preference and SMTP timeout budget.
+
+### Changed
+
+- Pack script also packs `Ironbrain.Email` / `Ironbrain.Calendar` (`LIB_VERSION`, default `0.1.0`).
+- `ListCalendarsAsync` Cli/Mcp call sites use named `cancellationToken` after the new `accountId` parameter.
+
+### Added (prior)
+
 - IMAP `mail move <uid> --to <mailbox>` and `mail archive <uid>` (CLI + MCP `move_email` / `archive_email`).
 - Per-account `Email:Imap:ArchiveFolder` with placeholders: `{CurrentYear}` (UTC now), `{YYYY}` / `{MM}` / `{YY}` / `{DD}` (message Date, else UTC now).
 - Prefer IMAP UID MOVE; fallback COPY + `\Deleted` + EXPUNGE; create missing archive hierarchy when allowed.
 
-### Changed
+### Changed (prior)
 
 - Default `Email:Imap:ArchiveFolder` when unset or empty is `Archive/{CurrentYear}` so `mail archive` works without config (package version remains 0.1.2).
 

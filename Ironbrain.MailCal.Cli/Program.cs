@@ -301,7 +301,7 @@ calCalendars.SetAction(async (parseResult, ct) =>
     {
         var (_, calendar, _) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt: null);
         var includeShared = ResolveIncludeShared(parseResult, includeSharedOpt, excludeSharedOpt);
-        var items = await calendar.ListCalendarsAsync(userId: null, includeShared, ct);
+        var items = await calendar.ListCalendarsAsync(userId: null, includeShared: includeShared, cancellationToken: ct);
         ConfigLoader.WriteJson(items.Select(c => new
         {
             displayName = c.DisplayName,

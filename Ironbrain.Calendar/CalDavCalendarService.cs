@@ -28,9 +28,10 @@ public sealed class CalDavCalendarService(
     public async Task<IReadOnlyList<CalendarCollectionInfo>> ListCalendarsAsync(
         string? userId = null,
         bool? includeShared = null,
+        string? accountId = null,
         CancellationToken cancellationToken = default)
     {
-        var opts = await ResolveOptionsAsync(userId, cancellationToken).ConfigureAwait(false);
+        var opts = await ResolveOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
         var all = await DiscoverCalendarsAsync(opts, useAuth: true, cancellationToken).ConfigureAwait(false);
         var include = includeShared ?? opts.IncludeSharedByDefault;
         return CalendarCollectionHelper.ApplyFilters(all, filters: null, includeShared: include);
@@ -86,7 +87,7 @@ public sealed class CalDavCalendarService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var opts = await ResolveOptionsAsync(userId, cancellationToken).ConfigureAwait(false);
+        var opts = await ResolveOptionsAsync(userId, cancellationToken, query.AccountId).ConfigureAwait(false);
 
         // Explicit single URL / .ics override
         if (!string.IsNullOrWhiteSpace(query.CalendarUrl))
@@ -139,7 +140,7 @@ public sealed class CalDavCalendarService(
         if (request.End <= request.Start)
             throw new ArgumentException("End date-time must be after start date-time.", nameof(request));
 
-        var opts = await ResolveOptionsAsync(userId, cancellationToken).ConfigureAwait(false);
+        var opts = await ResolveOptionsAsync(userId, cancellationToken, request.AccountId).ConfigureAwait(false);
 
         string url;
         bool useAuth;
@@ -314,7 +315,10 @@ public sealed class CalDavCalendarService(
         return parsed;
     }
 
-    private async Task<CalendarOptions> ResolveOptionsAsync(string? userId, CancellationToken cancellationToken)
+    private async Task<CalendarOptions> ResolveOptionsAsync(
+        string? userId,
+        CancellationToken cancellationToken,
+        string? accountId = null)
     {
         if (!string.IsNullOrWhiteSpace(userId))
         {
@@ -322,7 +326,7 @@ public sealed class CalDavCalendarService(
             var provider = scope.ServiceProvider.GetService<IUserCalendarOptionsProvider>();
             if (provider is not null)
             {
-                var fromUser = await provider.GetOptionsAsync(userId, cancellationToken).ConfigureAwait(false);
+                var fromUser = await provider.GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
                 if (fromUser is not null)
                     return fromUser;
             }

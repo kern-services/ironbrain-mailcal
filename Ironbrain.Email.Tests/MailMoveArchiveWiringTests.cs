@@ -85,6 +85,34 @@ public class MailMoveArchiveWiringTests
         Assert.DoesNotContain("secret-must-not-appear", ex.Message);
     }
 
+    [Fact]
+    public async Task TrashEmailAsync_EmptyTrashFolder_DefaultsToTrash_StillValidatesUidBeforeImap()
+    {
+        var service = CreateService(new ImapOptions
+        {
+            Host = "imap.example.invalid",
+            TrashFolder = ""
+        });
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.TrashEmailAsync("not-a-uid"));
+
+        Assert.Contains("Invalid IMAP UID", ex.Message);
+    }
+
+    [Fact]
+    public void ImapOptions_DefaultTrashFolder_IsTrash()
+    {
+        Assert.Equal("Trash", new ImapOptions().TrashFolder);
+    }
+
+    [Fact]
+    public void ImapOptions_DefaultTimeoutMs_MatchesSmtpDefault()
+    {
+        Assert.Equal(SmtpOptions.DefaultTimeoutMs, new ImapOptions().TimeoutMs);
+        Assert.Equal(15_000, SmtpOptions.DefaultTimeoutMs);
+    }
+
     private static MailKitEmailService CreateService(ImapOptions imap)
     {
         var services = new ServiceCollection().BuildServiceProvider();
