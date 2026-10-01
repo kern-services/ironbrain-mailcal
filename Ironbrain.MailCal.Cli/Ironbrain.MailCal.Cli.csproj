@@ -13,7 +13,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>ironbrain-mailcal</ToolCommandName>
     <PackageId>Ironbrain.MailCal.Cli</PackageId>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Authors>kern-services</Authors>
     <Company>kern-services</Company>
     <PackageTags>ironbrain;mail;imap;smtp;caldav;ical;mailcow;bot;cli;dotnet-tool</PackageTags>
