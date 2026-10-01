@@ -57,6 +57,11 @@ public sealed class CalendarQueryOptions
     /// When set, overrides <see cref="CalendarOptions.IncludeSharedByDefault"/>.
     /// </summary>
     public bool? IncludeShared { get; set; }
+
+    /// <summary>
+    /// Optional host calendar account id. When null, the host uses the first calendar config.
+    /// </summary>
+    public string? AccountId { get; set; }
 }
 
 /// <summary>Request to create a new calendar event via CalDAV PUT.</summary>
@@ -79,4 +84,9 @@ public sealed class CalendarAddRequest
     /// and <see cref="CalendarUrl"/> / <see cref="CalendarOptions.DefaultWriteCalendar"/> are unset).
     /// </summary>
     public string? CalendarSelector { get; set; }
+
+    /// <summary>
+    /// Optional host calendar account id. When null, the host uses the first calendar config.
+    /// </summary>
+    public string? AccountId { get; set; }
 }

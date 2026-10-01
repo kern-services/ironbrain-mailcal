@@ -6,5 +6,9 @@ namespace Ironbrain.Calendar;
 /// </summary>
 public interface IUserCalendarOptionsProvider
 {
-    Task<CalendarOptions?> GetOptionsAsync(string? userId, CancellationToken cancellationToken = default);
+    /// <param name="accountId">Optional host calendar account id. When null, uses the first calendar config.</param>
+    Task<CalendarOptions?> GetOptionsAsync(
+        string? userId,
+        CancellationToken cancellationToken = default,
+        string? accountId = null);
 }

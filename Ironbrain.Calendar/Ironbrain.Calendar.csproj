@@ -4,9 +4,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <IsPackable>false</IsPackable>
     <RootNamespace>Ironbrain.Calendar</RootNamespace>
-    <Description>CalDAV / iCalendar client for arbitrary self-hosted calendar servers (e.g. Mailcow SOGo).</Description>
+    <Description>CalDAV / iCalendar client for arbitrary self-hosted calendar servers (e.g. Mailcow SOGo). Shared by Ironbrain MailCal CLI/MCP and platform hosts.</Description>
+    <PackageId>Ironbrain.Calendar</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>kern-services</Authors>
+    <Company>kern-services</Company>
+    <PackageTags>ironbrain;calendar;caldav;ical;mailcow;sogo</PackageTags>
+    <PackageProjectUrl>https://www.ironbrain.de/mailcal/</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kern-services/ironbrain-mailcal</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +28,10 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

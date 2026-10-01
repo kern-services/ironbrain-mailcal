@@ -13,7 +13,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>ironbrain-mailcal-mcp</ToolCommandName>
     <PackageId>Ironbrain.MailCal.Mcp</PackageId>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Authors>kern-services</Authors>
     <Company>kern-services</Company>
     <PackageTags>ironbrain;mail;imap;smtp;caldav;mcp;cursor;bot;dotnet-tool</PackageTags>

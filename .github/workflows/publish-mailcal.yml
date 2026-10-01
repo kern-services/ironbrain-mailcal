@@ -1,0 +1,113 @@
+name: Publish MailCal tools and libs
+
+# Packs:
+#   - Ironbrain.Email / Ironbrain.Calendar (shared libraries)
+#   - Ironbrain.MailCal.Cli / Ironbrain.MailCal.Mcp (.NET global tools)
+#
+# Primary: nuget.org via Trusted Publishing (OIDC → short-lived API key).
+# Secondary: GitHub Packages via GITHUB_TOKEN.
+#
+# Triggers:
+#   - Tags: mailcal-v* (e.g. mailcal-v0.1.3) — tools version from tag; libs use LIB_VERSION_DEFAULT (0.1.0) unless set
+#   - workflow_dispatch with version / lib_version / dry_run
+#
+# nuget.org Trusted Publishing policy:
+#   Workflow File: publish-mailcal.yml
+#   Repository Owner: kern-services
+#   Repository: ironbrain-mailcal
+# Requires repo variable (or secret) NUGET_USER = nuget.org username.
+# See: https://learn.microsoft.com/nuget/nuget-org/trusted-publishing
+
+on:
+  push:
+    tags:
+      - 'mailcal-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Cli/Mcp package version (SemVer, without v prefix)'
+        required: true
+        default: '0.1.3'
+      lib_version:
+        description: 'Ironbrain.Email / Ironbrain.Calendar version (SemVer)'
+        required: true
+        default: '0.1.0'
+      dry_run:
+        description: 'Pack only (do not push to nuget.org)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  pack-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve versions
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+            LV="${{ inputs.lib_version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            V="${REF#mailcal-v}"
+            V="${V#v}"
+            LV="${LIB_VERSION_DEFAULT:-0.1.0}"
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "lib_version=${LV}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tools=${V} libs=${LV}"
+
+      - name: Make pack script executable
+        run: chmod +x scripts/pack-mailcal.sh
+
+      - name: Pack
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          LIB_VERSION: ${{ steps.ver.outputs.lib_version }}
+        run: ./scripts/pack-mailcal.sh
+
+      - name: Upload nupkg artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mailcal-nupkgs
+          path: artifacts/nuget/*.nupkg
+
+      - name: NuGet login (OIDC → temp API key)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
+
+      - name: Push to nuget.org
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: |
+          set -euo pipefail
+          dotnet nuget push artifacts/nuget/*.nupkg \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push to GitHub Packages (optional secondary)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          LIB_VERSION: ${{ steps.ver.outputs.lib_version }}
+          OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACK_SKIP: '1'
+        run: |
+          set -euo pipefail
+          ./scripts/pack-mailcal.sh --push-github

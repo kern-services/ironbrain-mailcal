@@ -6,9 +6,11 @@ namespace Ironbrain.Calendar;
 public interface ICalendarService
 {
     /// <summary>Lists CalDAV calendar collections under the account calendar home (or configured list).</summary>
+    /// <param name="accountId">Optional host calendar account id; null → first calendar config.</param>
     Task<IReadOnlyList<CalendarCollectionInfo>> ListCalendarsAsync(
         string? userId = null,
         bool? includeShared = null,
+        string? accountId = null,
         CancellationToken cancellationToken = default);
 
     /// <param name="userId">When set, uses this user's calendar config from the host; otherwise uses appsettings / file config.</param>
