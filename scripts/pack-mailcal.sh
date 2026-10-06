@@ -24,7 +24,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${ROOT}/artifacts/nuget"
 VERSION="${VERSION:-0.1.3}"
-LIB_VERSION="${LIB_VERSION:-0.1.0}"
+LIB_VERSION="${LIB_VERSION:-0.1.1}"
 OWNER="${OWNER:-kern-services}"
 GH_SOURCE_URL="https://nuget.pkg.github.com/${OWNER}/index.json"
 PUSH_GITHUB=false
