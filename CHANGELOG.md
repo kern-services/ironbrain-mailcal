@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-10-06
+
+### Added
+
+- `EmailForwardRequest` + `IEmailService.ForwardEmailAsync`: IMAP fetch → classic `Fw:` MIME with optional note preface and original attachments → SMTP send (Sent append when configured).
+- `EmailAttachmentInfo` on `EmailContent.Attachments` (file name / content type / size metadata; no binary in get responses).
+
+### Changed
+
+- Shared lib package version **0.1.1** (`Ironbrain.Email` / `Ironbrain.Calendar`).
+
 ## [0.1.3] — 2026-10-01
 
 ### Added

@@ -109,7 +109,8 @@ public sealed class MailKitEmailService(
             From = message.From?.FirstOrDefault()?.ToString() ?? string.Empty,
             BodyText = message.TextBody ?? string.Empty,
             BodyHtml = message.HtmlBody,
-            Date = message.Date
+            Date = message.Date,
+            Attachments = CollectAttachmentInfos(message)
         };
 
         await client.DisconnectAsync(true, timeoutCts.Token);
@@ -123,12 +124,7 @@ public sealed class MailKitEmailService(
         string? accountId = null)
     {
         var (smtp, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
-        if (!smtp.Enabled)
-        {
-            throw new InvalidOperationException(
-                "SMTP send is disabled for this mail configuration (Email:Smtp:Enabled=false). "
-                + "Enable sending on this account or use a different account; no automatic fallback.");
-        }
+        EnsureSmtpEnabled(smtp);
 
         var configSource = string.IsNullOrWhiteSpace(userId) ? "fallback (appsettings)" : "user config";
         logger.LogInformation("Sending email: To={To}, Subject={Subject}, From={From}, Config={ConfigSource}",
@@ -144,51 +140,53 @@ public sealed class MailKitEmailService(
             HtmlBody = request.HtmlBody
         }.ToMessageBody();
 
-        var smtpTimeoutMs = NormalizeTimeoutMs(smtp.TimeoutMs);
-        using var timeoutCts = CreateTimeoutCts(smtpTimeoutMs, cancellationToken);
-        var ct = timeoutCts.Token;
+        await SendMimeMessageAsync(smtp, imap, message, request.To, request.Subject, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
-        using var client = CreateSmtpClient(smtpTimeoutMs);
-        var secureSocket = smtp.UseSsl
-            ? SecureSocketOptions.SslOnConnect
-            : (smtp.UseStartTls ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto);
-        logger.LogDebug("Connecting to SMTP {Host}:{Port} (timeoutMs={TimeoutMs})", smtp.Host, smtp.Port, smtpTimeoutMs);
+    public async Task ForwardEmailAsync(
+        EmailForwardRequest request,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.To))
+            throw new ArgumentException("Recipient is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.EmailId))
+            throw new ArgumentException("Email id (IMAP UID) is required.", nameof(request));
 
-        try
-        {
-            await client.ConnectAsync(smtp.Host, smtp.Port, secureSocket, ct).ConfigureAwait(false);
+        var (smtp, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
+        EnsureSmtpEnabled(smtp);
+        EnsureImapConfigured(imap);
 
-            if (!string.IsNullOrWhiteSpace(smtp.Username))
-            {
-                PreferSafeSasl(client);
-                await client.AuthenticateAsync(smtp.Username, smtp.Password, ct).ConfigureAwait(false);
-            }
+        var folderName = ResolveMailbox(imap, request.SourceMailbox);
+        var uid = ParseUid(request.EmailId);
 
-            await client.SendAsync(message, ct).ConfigureAwait(false);
-            await client.DisconnectAsync(true, ct).ConfigureAwait(false);
-            logger.LogInformation("Email sent successfully: To={To}, Subject={Subject}", request.To, request.Subject);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            logger.LogError(
-                "SMTP send timed out after {TimeoutMs}ms: To={To}, Subject={Subject}, Host={Host}:{Port}",
-                smtpTimeoutMs, request.To, request.Subject, smtp.Host, smtp.Port);
-            throw new TimeoutException(
-                $"SMTP send timed out after {smtpTimeoutMs}ms contacting {smtp.Host}:{smtp.Port}. "
-                + "Check SMTP host/port/TLS settings for this mail integration.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to send email: To={To}, Subject={Subject}", request.To, request.Subject);
-            throw;
-        }
+        using var imapTimeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
+        using var imapClient = await ConnectImapAsync(imap, imapTimeoutCts.Token).ConfigureAwait(false);
+        var folder = await imapClient.GetFolderAsync(folderName, imapTimeoutCts.Token).ConfigureAwait(false);
+        await folder.OpenAsync(FolderAccess.ReadOnly, imapTimeoutCts.Token).ConfigureAwait(false);
+        var original = await folder.GetMessageAsync(uid, imapTimeoutCts.Token).ConfigureAwait(false);
+        await imapClient.DisconnectAsync(true, imapTimeoutCts.Token).ConfigureAwait(false);
 
-        var sentFolderName = imap.SentFolder ?? "Sent";
-        if (!string.IsNullOrWhiteSpace(sentFolderName) && !string.IsNullOrWhiteSpace(imap.Host))
-        {
-            await AppendToSentFolderAsync(imap, message, sentFolderName, request.To, request.Subject, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        var subject = ResolveForwardSubject(request.Subject, original.Subject);
+        var builder = await BuildForwardBodyAsync(original, request.Note, cancellationToken).ConfigureAwait(false);
+        var attachmentCount = builder.Attachments.Count;
+
+        var message = new MimeMessage();
+        message.From.Add(new MailboxAddress(smtp.FromName, smtp.FromAddress));
+        message.To.Add(MailboxAddress.Parse(request.To.Trim()));
+        message.Subject = subject;
+        message.Body = builder.ToMessageBody();
+
+        var configSource = string.IsNullOrWhiteSpace(userId) ? "fallback (appsettings)" : "user config";
+        logger.LogInformation(
+            "Forwarding email: Uid={Uid}, Mailbox={Mailbox}, To={To}, Subject={Subject}, Attachments={AttachmentCount}, From={From}, Config={ConfigSource}",
+            request.EmailId, folderName, request.To, subject, attachmentCount, smtp.FromAddress, configSource);
+
+        await SendMimeMessageAsync(smtp, imap, message, request.To.Trim(), subject, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<EmailMoveResult> MoveEmailAsync(
@@ -305,6 +303,182 @@ public sealed class MailKitEmailService(
 
         return await MoveEmailAsync(id, destination, sourceMailbox, userId, cancellationToken, accountId)
             .ConfigureAwait(false);
+    }
+
+    private async Task SendMimeMessageAsync(
+        SmtpOptions smtp,
+        ImapOptions imap,
+        MimeMessage message,
+        string to,
+        string subject,
+        CancellationToken cancellationToken)
+    {
+        var smtpTimeoutMs = NormalizeTimeoutMs(smtp.TimeoutMs);
+        using var timeoutCts = CreateTimeoutCts(smtpTimeoutMs, cancellationToken);
+        var ct = timeoutCts.Token;
+
+        using var client = CreateSmtpClient(smtpTimeoutMs);
+        var secureSocket = smtp.UseSsl
+            ? SecureSocketOptions.SslOnConnect
+            : (smtp.UseStartTls ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto);
+        logger.LogDebug("Connecting to SMTP {Host}:{Port} (timeoutMs={TimeoutMs})", smtp.Host, smtp.Port, smtpTimeoutMs);
+
+        try
+        {
+            await client.ConnectAsync(smtp.Host, smtp.Port, secureSocket, ct).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(smtp.Username))
+            {
+                PreferSafeSasl(client);
+                await client.AuthenticateAsync(smtp.Username, smtp.Password, ct).ConfigureAwait(false);
+            }
+
+            await client.SendAsync(message, ct).ConfigureAwait(false);
+            await client.DisconnectAsync(true, ct).ConfigureAwait(false);
+            logger.LogInformation("Email sent successfully: To={To}, Subject={Subject}", to, subject);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(
+                "SMTP send timed out after {TimeoutMs}ms: To={To}, Subject={Subject}, Host={Host}:{Port}",
+                smtpTimeoutMs, to, subject, smtp.Host, smtp.Port);
+            throw new TimeoutException(
+                $"SMTP send timed out after {smtpTimeoutMs}ms contacting {smtp.Host}:{smtp.Port}. "
+                + "Check SMTP host/port/TLS settings for this mail integration.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to send email: To={To}, Subject={Subject}", to, subject);
+            throw;
+        }
+
+        var sentFolderName = imap.SentFolder ?? "Sent";
+        if (!string.IsNullOrWhiteSpace(sentFolderName) && !string.IsNullOrWhiteSpace(imap.Host))
+        {
+            await AppendToSentFolderAsync(imap, message, sentFolderName, to, subject, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static void EnsureSmtpEnabled(SmtpOptions smtp)
+    {
+        if (!smtp.Enabled)
+        {
+            throw new InvalidOperationException(
+                "SMTP send is disabled for this mail configuration (Email:Smtp:Enabled=false). "
+                + "Enable sending on this account or use a different account; no automatic fallback.");
+        }
+    }
+
+    /// <summary>
+    /// Builds a classic forward body: optional note, forwarded-message header, original text/html,
+    /// and copies of original attachment parts (Content-Disposition: attachment).
+    /// </summary>
+    internal static async Task<BodyBuilder> BuildForwardBodyAsync(
+        MimeMessage original,
+        string? note,
+        CancellationToken cancellationToken)
+    {
+        var builder = new BodyBuilder();
+        var from = original.From?.ToString() ?? string.Empty;
+        var header =
+            "---------- Forwarded message ----------" + Environment.NewLine
+            + $"From: {from}" + Environment.NewLine
+            + $"Date: {original.Date:u}" + Environment.NewLine
+            + $"Subject: {original.Subject ?? string.Empty}" + Environment.NewLine
+            + Environment.NewLine;
+
+        var noteBlock = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        var originalText = original.TextBody ?? string.Empty;
+        builder.TextBody = noteBlock is null
+            ? header + originalText
+            : noteBlock + Environment.NewLine + Environment.NewLine + header + originalText;
+
+        if (!string.IsNullOrWhiteSpace(original.HtmlBody))
+        {
+            var htmlHeader =
+                "<p>---------- Forwarded message ----------<br/>"
+                + $"From: {System.Net.WebUtility.HtmlEncode(from)}<br/>"
+                + $"Date: {original.Date:u}<br/>"
+                + $"Subject: {System.Net.WebUtility.HtmlEncode(original.Subject ?? string.Empty)}</p>";
+            var htmlNote = noteBlock is null
+                ? ""
+                : $"<p>{System.Net.WebUtility.HtmlEncode(noteBlock).Replace("\n", "<br/>", StringComparison.Ordinal)}</p>";
+            builder.HtmlBody = htmlNote + htmlHeader + original.HtmlBody;
+        }
+
+        foreach (var attachment in original.Attachments)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attachment is not MimePart part)
+                continue;
+
+            if (part.Content is null)
+                continue;
+
+            await using var ms = new MemoryStream();
+            await part.Content.DecodeToAsync(ms, cancellationToken).ConfigureAwait(false);
+            var bytes = ms.ToArray();
+            var fileName = ResolveAttachmentFileName(part);
+            builder.Attachments.Add(fileName, bytes, part.ContentType);
+        }
+
+        return builder;
+    }
+
+    internal static string ResolveForwardSubject(string? requestedSubject, string? originalSubject)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedSubject))
+            return requestedSubject.Trim();
+
+        var original = originalSubject?.Trim() ?? string.Empty;
+        if (original.StartsWith("Fw:", StringComparison.OrdinalIgnoreCase)
+            || original.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase))
+            return original;
+        return string.IsNullOrEmpty(original) ? "Fw:" : "Fw: " + original;
+    }
+
+    internal static IReadOnlyList<EmailAttachmentInfo> CollectAttachmentInfos(MimeMessage message)
+    {
+        var list = new List<EmailAttachmentInfo>();
+        foreach (var attachment in message.Attachments)
+        {
+            if (attachment is not MimePart part)
+                continue;
+
+            long size = 0;
+            try
+            {
+                if (part.Content?.Stream is { CanSeek: true } stream)
+                    size = stream.Length;
+                else if (part.ContentDisposition?.Size is long declared && declared >= 0)
+                    size = declared;
+            }
+            catch
+            {
+                size = 0;
+            }
+
+            list.Add(new EmailAttachmentInfo
+            {
+                FileName = ResolveAttachmentFileName(part),
+                ContentType = part.ContentType?.MimeType,
+                Size = size
+            });
+        }
+
+        return list;
+    }
+
+    internal static string ResolveAttachmentFileName(MimePart part)
+    {
+        if (!string.IsNullOrWhiteSpace(part.FileName))
+            return part.FileName.Trim();
+        if (!string.IsNullOrWhiteSpace(part.ContentDisposition?.FileName))
+            return part.ContentDisposition!.FileName!.Trim();
+        if (!string.IsNullOrWhiteSpace(part.ContentType?.Name))
+            return part.ContentType.Name.Trim();
+        return "attachment";
     }
 
     private async Task AppendToSentFolderAsync(

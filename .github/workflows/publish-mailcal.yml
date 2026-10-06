@@ -31,7 +31,7 @@ on:
       lib_version:
         description: 'Ironbrain.Email / Ironbrain.Calendar version (SemVer)'
         required: true
-        default: '0.1.0'
+        default: '0.1.1'
       dry_run:
         description: 'Pack only (do not push to nuget.org)'
         type: boolean
