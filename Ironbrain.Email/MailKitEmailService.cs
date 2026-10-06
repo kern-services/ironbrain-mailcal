@@ -31,11 +31,43 @@ public sealed class MailKitEmailService(
             if (provider is not null)
             {
                 var (smtp, imap) = await provider.GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
-                if (smtp is not null && imap is not null)
-                    return (smtp, imap);
+                // Partial accounts are OK — fill the missing side from appsettings fallback.
+                if (smtp is not null || imap is not null)
+                    return (smtp ?? _smtpFallback, imap ?? _imapFallback);
             }
         }
         return (_smtpFallback, _imapFallback);
+    }
+
+    private async Task<(SmtpOptions Smtp, ImapOptions Imap)> GetSplitOptionsAsync(
+        string? userId,
+        CancellationToken cancellationToken,
+        string? accountId,
+        string? sourceAccountId,
+        string? sendAccountId)
+    {
+        var sourceId = FirstNonEmpty(sourceAccountId, accountId);
+        var sendId = FirstNonEmpty(sendAccountId, accountId);
+
+        if (string.Equals(sourceId, sendId, StringComparison.OrdinalIgnoreCase)
+            || (sourceId is null && sendId is null))
+        {
+            return await GetOptionsAsync(userId, cancellationToken, sourceId).ConfigureAwait(false);
+        }
+
+        var (_, imap) = await GetOptionsAsync(userId, cancellationToken, sourceId).ConfigureAwait(false);
+        var (smtp, _) = await GetOptionsAsync(userId, cancellationToken, sendId).ConfigureAwait(false);
+        return (smtp, imap);
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v))
+                return v.Trim();
+        }
+        return null;
     }
 
     public async Task<IReadOnlyList<EmailSummary>> ListInboxAsync(
@@ -148,7 +180,9 @@ public sealed class MailKitEmailService(
         EmailForwardRequest request,
         string? userId = null,
         CancellationToken cancellationToken = default,
-        string? accountId = null)
+        string? accountId = null,
+        string? sourceAccountId = null,
+        string? sendAccountId = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.To))
@@ -156,7 +190,11 @@ public sealed class MailKitEmailService(
         if (string.IsNullOrWhiteSpace(request.EmailId))
             throw new ArgumentException("Email id (IMAP UID) is required.", nameof(request));
 
-        var (smtp, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
+        var effectiveSourceId = FirstNonEmpty(sourceAccountId, accountId);
+        var effectiveSendId = FirstNonEmpty(sendAccountId, accountId);
+        var (smtp, imap) = await GetSplitOptionsAsync(
+                userId, cancellationToken, accountId, sourceAccountId, sendAccountId)
+            .ConfigureAwait(false);
         EnsureSmtpEnabled(smtp);
         EnsureImapConfigured(imap);
 
@@ -165,7 +203,22 @@ public sealed class MailKitEmailService(
 
         using var imapTimeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var imapClient = await ConnectImapAsync(imap, imapTimeoutCts.Token).ConfigureAwait(false);
-        var folder = await imapClient.GetFolderAsync(folderName, imapTimeoutCts.Token).ConfigureAwait(false);
+        IMailFolder folder;
+        try
+        {
+            folder = await imapClient.GetFolderAsync(folderName, imapTimeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (FolderNotFoundException ex)
+        {
+            throw new InvalidOperationException(
+                FormatFolderNotFound(
+                    folderName,
+                    imap,
+                    effectiveSourceId,
+                    "ForwardEmail IMAP source"),
+                ex);
+        }
+
         await folder.OpenAsync(FolderAccess.ReadOnly, imapTimeoutCts.Token).ConfigureAwait(false);
         var original = await folder.GetMessageAsync(uid, imapTimeoutCts.Token).ConfigureAwait(false);
         await imapClient.DisconnectAsync(true, imapTimeoutCts.Token).ConfigureAwait(false);
@@ -182,11 +235,29 @@ public sealed class MailKitEmailService(
 
         var configSource = string.IsNullOrWhiteSpace(userId) ? "fallback (appsettings)" : "user config";
         logger.LogInformation(
-            "Forwarding email: Uid={Uid}, Mailbox={Mailbox}, To={To}, Subject={Subject}, Attachments={AttachmentCount}, From={From}, Config={ConfigSource}",
-            request.EmailId, folderName, request.To, subject, attachmentCount, smtp.FromAddress, configSource);
+            "Forwarding email: Uid={Uid}, Mailbox={Mailbox}, To={To}, Subject={Subject}, Attachments={AttachmentCount}, From={From}, SourceAccount={SourceAccount}, SendAccount={SendAccount}, Config={ConfigSource}",
+            request.EmailId, folderName, request.To, subject, attachmentCount, smtp.FromAddress,
+            effectiveSourceId ?? "(default)", effectiveSendId ?? "(default)", configSource);
 
+        // Sent-folder append uses send-side IMAP when available (same host as SMTP account).
         await SendMimeMessageAsync(smtp, imap, message, request.To.Trim(), subject, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    internal static string FormatFolderNotFound(
+        string folderName,
+        ImapOptions imap,
+        string? accountId,
+        string operation)
+    {
+        var account = string.IsNullOrWhiteSpace(accountId) ? "(default IMAP account)" : accountId.Trim();
+        var user = string.IsNullOrWhiteSpace(imap.Username) ? "(no username)" : imap.Username.Trim();
+        var host = string.IsNullOrWhiteSpace(imap.Host) ? "(no host)" : imap.Host.Trim();
+        return
+            $"{operation}: folder '{folderName}' not found on IMAP {user}@{host} " +
+            $"(accountId={account}). " +
+            "Pass sourceAccountId for the account that owns this mailbox " +
+            "(same account as list_emails/get_email), or fix SourceMailbox.";
     }
 
     public async Task<EmailMoveResult> MoveEmailAsync(
@@ -432,10 +503,10 @@ public sealed class MailKitEmailService(
             return requestedSubject.Trim();
 
         var original = originalSubject?.Trim() ?? string.Empty;
-        if (original.StartsWith("Fw:", StringComparison.OrdinalIgnoreCase)
-            || original.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase))
+        if (original.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase)
+            || original.StartsWith("Fw:", StringComparison.OrdinalIgnoreCase))
             return original;
-        return string.IsNullOrEmpty(original) ? "Fw:" : "Fw: " + original;
+        return string.IsNullOrEmpty(original) ? "Fwd:" : "Fwd: " + original;
     }
 
     internal static IReadOnlyList<EmailAttachmentInfo> CollectAttachmentInfos(MimeMessage message)
