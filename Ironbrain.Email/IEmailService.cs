@@ -31,15 +31,22 @@ public interface IEmailService
 
     /// <summary>
     /// Forwards an IMAP message by UID to a new recipient via SMTP, including original attachments.
-    /// Fetches the source MIME at send time, builds a classic <c>Fw:</c> message with optional note preface,
+    /// Fetches the source MIME at send time, builds a classic <c>Fwd:</c> message with optional note preface,
     /// re-attaches original attachment parts, and appends a copy to Sent when configured.
     /// </summary>
-    /// <param name="accountId">Optional host account id; null → first mail config.</param>
+    /// <param name="accountId">
+    /// Optional legacy single account id used for both IMAP source and SMTP send when
+    /// <paramref name="sourceAccountId"/> / <paramref name="sendAccountId"/> are omitted.
+    /// </param>
+    /// <param name="sourceAccountId">Optional IMAP account id (overrides <paramref name="accountId"/> for fetch).</param>
+    /// <param name="sendAccountId">Optional SMTP account id (overrides <paramref name="accountId"/> for send).</param>
     Task ForwardEmailAsync(
         EmailForwardRequest request,
         string? userId = null,
         CancellationToken cancellationToken = default,
-        string? accountId = null);
+        string? accountId = null,
+        string? sourceAccountId = null,
+        string? sendAccountId = null);
 
     /// <summary>
     /// Moves a message by IMAP UID from the account mailbox (or <paramref name="sourceMailbox"/>) to <paramref name="destinationMailbox"/>.

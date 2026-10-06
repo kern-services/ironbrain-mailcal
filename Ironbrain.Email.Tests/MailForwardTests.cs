@@ -10,20 +10,43 @@ namespace Ironbrain.Email.Tests;
 public class MailForwardTests
 {
     [Theory]
-    [InlineData(null, "Invoice", "Fw: Invoice")]
-    [InlineData("", "Invoice", "Fw: Invoice")]
-    [InlineData("  ", "Invoice", "Fw: Invoice")]
+    [InlineData(null, "Invoice", "Fwd: Invoice")]
+    [InlineData("", "Invoice", "Fwd: Invoice")]
+    [InlineData("  ", "Invoice", "Fwd: Invoice")]
     [InlineData("Custom", "Invoice", "Custom")]
     [InlineData(null, "Fw: Invoice", "Fw: Invoice")]
     [InlineData(null, "Fwd: Invoice", "Fwd: Invoice")]
-    [InlineData(null, null, "Fw:")]
-    [InlineData(null, "", "Fw:")]
-    public void ResolveForwardSubject_AppliesFwPrefixOrOverride(
+    [InlineData(null, null, "Fwd:")]
+    [InlineData(null, "", "Fwd:")]
+    public void ResolveForwardSubject_AppliesFwdPrefixOrOverride(
         string? requested,
         string? original,
         string expected)
     {
         Assert.Equal(expected, MailKitEmailService.ResolveForwardSubject(requested, original));
+    }
+
+    [Fact]
+    public void FormatFolderNotFound_IncludesAccountHostFolder()
+    {
+        var msg = MailKitEmailService.FormatFolderNotFound(
+            "Archive/2026",
+            new ImapOptions { Host = "imap.example.com", Username = "assistant@example.com" },
+            accountId: null,
+            operation: "ForwardEmail IMAP source");
+
+        Assert.Contains("Archive/2026", msg, StringComparison.Ordinal);
+        Assert.Contains("assistant@example.com", msg, StringComparison.Ordinal);
+        Assert.Contains("imap.example.com", msg, StringComparison.Ordinal);
+        Assert.Contains("sourceAccountId", msg, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FolderPathCandidates_IncludesSlashDotAlternates()
+    {
+        var candidates = MailKitEmailService.FolderPathCandidates("Archive/2026");
+        Assert.Equal("Archive/2026", candidates[0]);
+        Assert.Contains("Archive.2026", candidates);
     }
 
     [Fact]

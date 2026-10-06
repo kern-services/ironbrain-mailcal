@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-06
+
+### Added
+
+- `ForwardEmailAsync` optional `sourceAccountId` / `sendAccountId` (IMAP source vs SMTP send); legacy `accountId` still sets both.
+- Actionable `FolderNotFound` errors include IMAP user/host, folder, and accountId hint.
+- Separator-tolerant `GetExistingMailboxAsync` for Forward/Move/Archive/List/Get source folders (tries `/`↔`.` and walks personal namespace; **no** auto-create).
+
+### Changed
+
+- Default forward subject prefix prefers `Fwd:` (still accepts existing `Fw:` / `Fwd:`).
+- Host `IUserEmailOptionsProvider` may return SMTP-only or IMAP-only options; MailKit merges with appsettings fallback per side.
+- Shared lib package version **0.1.2** (`Ironbrain.Email`).
+
 ## [0.1.1] — 2026-10-06
 
 ### Added

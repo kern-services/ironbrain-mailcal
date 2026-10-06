@@ -7,7 +7,7 @@
     <RootNamespace>Ironbrain.Email</RootNamespace>
     <Description>IMAP/SMTP client (MailKit) for self-hosted mail servers. Shared by Ironbrain MailCal CLI/MCP and platform hosts.</Description>
     <PackageId>Ironbrain.Email</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Authors>kern-services</Authors>
     <Company>kern-services</Company>
     <PackageTags>ironbrain;mail;imap;smtp;mailkit;mailcow</PackageTags>
