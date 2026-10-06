@@ -42,6 +42,14 @@ public class MailForwardTests
     }
 
     [Fact]
+    public void FolderPathCandidates_IncludesSlashDotAlternates()
+    {
+        var candidates = MailKitEmailService.FolderPathCandidates("Archive/2026");
+        Assert.Equal("Archive/2026", candidates[0]);
+        Assert.Contains("Archive.2026", candidates);
+    }
+
+    [Fact]
     public async Task BuildForwardBodyAsync_IncludesNoteHeaderAndAttachments()
     {
         var original = new MimeMessage();

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `ForwardEmailAsync` optional `sourceAccountId` / `sendAccountId` (IMAP source vs SMTP send); legacy `accountId` still sets both.
 - Actionable `FolderNotFound` errors include IMAP user/host, folder, and accountId hint.
+- Separator-tolerant `GetExistingMailboxAsync` for Forward/Move/Archive/List/Get source folders (tries `/`↔`.` and walks personal namespace; **no** auto-create).
 
 ### Changed
 

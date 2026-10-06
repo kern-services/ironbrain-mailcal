@@ -85,7 +85,7 @@ public sealed class MailKitEmailService(
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
 
-        var inbox = await client.GetFolderAsync(folderName, timeoutCts.Token);
+        var inbox = await GetExistingMailboxAsync(client, folderName, timeoutCts.Token).ConfigureAwait(false);
         await inbox.OpenAsync(FolderAccess.ReadOnly, timeoutCts.Token);
 
         var messageCount = inbox.Count;
@@ -130,7 +130,7 @@ public sealed class MailKitEmailService(
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
 
-        var inbox = await client.GetFolderAsync(folderName, timeoutCts.Token);
+        var inbox = await GetExistingMailboxAsync(client, folderName, timeoutCts.Token).ConfigureAwait(false);
         await inbox.OpenAsync(FolderAccess.ReadOnly, timeoutCts.Token);
 
         var message = await inbox.GetMessageAsync(uid, timeoutCts.Token);
@@ -206,7 +206,7 @@ public sealed class MailKitEmailService(
         IMailFolder folder;
         try
         {
-            folder = await imapClient.GetFolderAsync(folderName, imapTimeoutCts.Token).ConfigureAwait(false);
+            folder = await GetExistingMailboxAsync(imapClient, folderName, imapTimeoutCts.Token).ConfigureAwait(false);
         }
         catch (FolderNotFoundException ex)
         {
@@ -280,7 +280,7 @@ public sealed class MailKitEmailService(
 
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
-        var source = await client.GetFolderAsync(sourceName, timeoutCts.Token);
+        var source = await GetExistingMailboxAsync(client, sourceName, timeoutCts.Token).ConfigureAwait(false);
         await source.OpenAsync(FolderAccess.ReadWrite, timeoutCts.Token);
 
         var destination = await GetOrCreateMailboxAsync(client, destName, timeoutCts.Token).ConfigureAwait(false);
@@ -318,7 +318,7 @@ public sealed class MailKitEmailService(
 
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
-        var source = await client.GetFolderAsync(sourceName, timeoutCts.Token);
+        var source = await GetExistingMailboxAsync(client, sourceName, timeoutCts.Token).ConfigureAwait(false);
         await source.OpenAsync(FolderAccess.ReadWrite, timeoutCts.Token);
 
         DateTimeOffset? effectiveDate = messageDate;
@@ -585,17 +585,108 @@ public sealed class MailKitEmailService(
     }
 
     /// <summary>
-    /// Resolves an existing mailbox or creates the hierarchy under the personal namespace when allowed.
+    /// Opens an existing mailbox with separator-tolerant lookup (no create).
+    /// Tries the path as given, then with <c>/</c>↔<c>.</c> alternates, then walks the
+    /// personal namespace using the server directory separator.
     /// </summary>
-    internal static async Task<IMailFolder> GetOrCreateMailboxAsync(ImapClient client, string mailboxPath, CancellationToken cancellationToken)
+    internal static async Task<IMailFolder> GetExistingMailboxAsync(
+        ImapClient client,
+        string mailboxPath,
+        CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeMailboxPath(mailboxPath);
+        foreach (var candidate in FolderPathCandidates(normalized))
+        {
+            try
+            {
+                return await client.GetFolderAsync(candidate, cancellationToken).ConfigureAwait(false);
+            }
+            catch (FolderNotFoundException)
+            {
+                // try next candidate
+            }
+        }
+
+        if (client.PersonalNamespaces.Count > 0)
+        {
+            var walked = await TryWalkExistingMailboxAsync(client, normalized, cancellationToken)
+                .ConfigureAwait(false);
+            if (walked is not null)
+                return walked;
+        }
+
+        throw new FolderNotFoundException(normalized);
+    }
+
+    internal static string NormalizeMailboxPath(string mailboxPath)
     {
         var normalized = mailboxPath.Trim().TrimEnd('/', '.', ' ');
         if (string.IsNullOrWhiteSpace(normalized))
             throw new ArgumentException("Mailbox path must not be empty.", nameof(mailboxPath));
+        return normalized;
+    }
+
+    /// <summary>Candidate full paths for separator-tolerant lookup (deterministic, no duplicates).</summary>
+    internal static IReadOnlyList<string> FolderPathCandidates(string normalized)
+    {
+        var list = new List<string> { normalized };
+        var slashToDot = normalized.Replace('/', '.');
+        var dotToSlash = normalized.Replace('.', '/');
+        if (!string.Equals(slashToDot, normalized, StringComparison.Ordinal))
+            list.Add(slashToDot);
+        if (!string.Equals(dotToSlash, normalized, StringComparison.Ordinal)
+            && !string.Equals(dotToSlash, slashToDot, StringComparison.Ordinal))
+            list.Add(dotToSlash);
+        return list;
+    }
+
+    private static async Task<IMailFolder?> TryWalkExistingMailboxAsync(
+        ImapClient client,
+        string normalized,
+        CancellationToken cancellationToken)
+    {
+        var root = client.GetFolder(client.PersonalNamespaces[0]);
+        var sep = root.DirectorySeparator;
+        var pathForSplit = normalized.Replace('/', sep).Replace('\\', sep);
+        // Also accept '.' as a separator when the server uses something else (common for Archive/2026 vs Archive.2026).
+        if (sep != '.')
+            pathForSplit = pathForSplit.Replace('.', sep);
+
+        var parts = pathForSplit.Split(new[] { sep }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+            return null;
+
+        IMailFolder current = root;
+        foreach (var segment in parts)
+        {
+            if (segment is "." or ".." || segment.Contains("..", StringComparison.Ordinal))
+                return null;
+            try
+            {
+                var existing = await current.GetSubfolderAsync(segment, cancellationToken).ConfigureAwait(false);
+                if (existing is null)
+                    return null;
+                current = existing;
+            }
+            catch (FolderNotFoundException)
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Resolves an existing mailbox or creates the hierarchy under the personal namespace when allowed.
+    /// </summary>
+    internal static async Task<IMailFolder> GetOrCreateMailboxAsync(ImapClient client, string mailboxPath, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeMailboxPath(mailboxPath);
 
         try
         {
-            return await client.GetFolderAsync(normalized, cancellationToken).ConfigureAwait(false);
+            return await GetExistingMailboxAsync(client, normalized, cancellationToken).ConfigureAwait(false);
         }
         catch (FolderNotFoundException)
         {
