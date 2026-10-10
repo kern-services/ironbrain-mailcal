@@ -60,6 +60,13 @@ public sealed class ImapOptions
     public string TrashFolder { get; set; } = "Trash";
 
     /// <summary>
+    /// Optional IMAP Drafts folder override for <see cref="IEmailService.SaveDraftAsync"/>.
+    /// When empty, resolution uses SPECIAL-USE <c>\Drafts</c>, then name fallbacks
+    /// (<c>Drafts</c>, <c>Entwürfe</c>).
+    /// </summary>
+    public string DraftsFolder { get; set; } = string.Empty;
+
+    /// <summary>
     /// MailKit <c>ImapClient.Timeout</c> in milliseconds. Default matches
     /// <see cref="SmtpOptions.DefaultTimeoutMs"/> so Sent-folder append cannot hang forever.
     /// </summary>

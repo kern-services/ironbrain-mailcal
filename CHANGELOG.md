@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-10-10
+
+### Added
+
+- `IEmailService.SaveDraftAsync` / `EmailSaveDraftRequest`: IMAP APPEND into Drafts with `\Draft` flag.
+- Drafts folder resolution: request/config override → SPECIAL-USE `\Drafts` → `Drafts` / `Entwürfe` (create when missing).
+- Draft From uses IMAP account identity (`ImapOptions.Username`), never SMTP send-as.
+- Reply drafts: `ReplyToMessageId` + mailbox → In-Reply-To / References, default `Re:` subject, optional quote.
+- `EmailContent.To` / `Cc` / `MessageId` on `GetEmailAsync`.
+- `ImapOptions.DraftsFolder` per-account override.
+
+### Changed
+
+- Shared lib package version **0.1.3** (`Ironbrain.Email`).
+
 ## [0.1.2] — 2026-10-06
 
 ### Added
@@ -32,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Shared lib package version **0.1.1** (`Ironbrain.Email` / `Ironbrain.Calendar`).
 
-## [0.1.3] — 2026-10-01
+## [0.1.0] — 2026-10-01
 
 ### Added
 
