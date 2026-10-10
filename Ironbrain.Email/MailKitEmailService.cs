@@ -139,6 +139,9 @@ public sealed class MailKitEmailService(
             Id = id,
             Subject = message.Subject ?? string.Empty,
             From = message.From?.FirstOrDefault()?.ToString() ?? string.Empty,
+            To = FormatAddressList(message.To),
+            Cc = FormatAddressList(message.Cc),
+            MessageId = string.IsNullOrWhiteSpace(message.MessageId) ? null : message.MessageId.Trim(),
             BodyText = message.TextBody ?? string.Empty,
             BodyHtml = message.HtmlBody,
             Date = message.Date,
@@ -147,6 +150,90 @@ public sealed class MailKitEmailService(
 
         await client.DisconnectAsync(true, timeoutCts.Token);
         return content;
+    }
+
+    public async Task<EmailSaveDraftResult> SaveDraftAsync(
+        EmailSaveDraftRequest request,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
+        EnsureImapConfigured(imap);
+
+        var fromAddress = ResolveDraftFromAddress(imap);
+        MimeMessage? replySource = null;
+        string? replySourceFolder = null;
+
+        using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
+        using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
+
+        if (!string.IsNullOrWhiteSpace(request.ReplyToMessageId))
+        {
+            replySourceFolder = ResolveMailbox(imap, request.ReplyToMailbox);
+            var uid = ParseUid(request.ReplyToMessageId);
+            IMailFolder sourceFolder;
+            try
+            {
+                sourceFolder = await GetExistingMailboxAsync(client, replySourceFolder, timeoutCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (FolderNotFoundException ex)
+            {
+                throw new InvalidOperationException(
+                    FormatFolderNotFound(replySourceFolder, imap, accountId, "SaveDraft reply source"),
+                    ex);
+            }
+
+            await sourceFolder.OpenAsync(FolderAccess.ReadOnly, timeoutCts.Token).ConfigureAwait(false);
+            replySource = await sourceFolder.GetMessageAsync(uid, timeoutCts.Token).ConfigureAwait(false);
+        }
+
+        var draftsFolderName = await ResolveDraftsFolderAsync(
+                client, imap, request.DraftsFolder, timeoutCts.Token)
+            .ConfigureAwait(false);
+
+        IMailFolder draftsFolder;
+        try
+        {
+            draftsFolder = await GetOrCreateMailboxAsync(client, draftsFolderName, timeoutCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                FormatFolderNotFound(draftsFolderName, imap, accountId, "SaveDraft Drafts folder"),
+                ex);
+        }
+
+        var message = await BuildDraftMimeAsync(request, fromAddress, replySource, cancellationToken)
+            .ConfigureAwait(false);
+
+        logger.LogInformation(
+            "Saving draft: Folder={Folder}, From={From}, To={To}, Subject={Subject}, ReplyToUid={ReplyToUid}, Account={Account}",
+            draftsFolderName,
+            fromAddress,
+            request.To ?? "(none)",
+            message.Subject ?? "",
+            request.ReplyToMessageId ?? "(none)",
+            accountId ?? "(default)");
+
+        var appendResult = await draftsFolder
+            .AppendAsync(message, MessageFlags.Draft, timeoutCts.Token)
+            .ConfigureAwait(false);
+
+        var appendedUid = appendResult.HasValue ? appendResult.Value.Id.ToString() : string.Empty;
+        await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
+
+        return new EmailSaveDraftResult
+        {
+            Id = appendedUid,
+            Folder = draftsFolderName,
+            From = fromAddress,
+            Subject = message.Subject ?? string.Empty
+        };
     }
 
     public async Task SendEmailAsync(
@@ -765,6 +852,234 @@ public sealed class MailKitEmailService(
         if (!string.IsNullOrWhiteSpace(mailboxOverride))
             return mailboxOverride.Trim();
         return string.IsNullOrWhiteSpace(imap.Mailbox) ? "INBOX" : imap.Mailbox;
+    }
+
+    /// <summary>
+    /// Draft From is the IMAP account identity (username), never SMTP send-as FromAddress.
+    /// </summary>
+    internal static string ResolveDraftFromAddress(ImapOptions imap)
+    {
+        var user = imap.Username?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(user))
+        {
+            throw new InvalidOperationException(
+                "IMAP username is required to set draft From (IMAP account identity, not SMTP send-as).");
+        }
+
+        return user;
+    }
+
+    /// <summary>
+    /// Resolves Drafts folder: request override → config → SPECIAL-USE \Drafts → Drafts / Entwürfe.
+    /// </summary>
+    internal static async Task<string> ResolveDraftsFolderAsync(
+        ImapClient client,
+        ImapOptions imap,
+        string? requestOverride,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(requestOverride))
+            return NormalizeMailboxPath(requestOverride);
+
+        if (!string.IsNullOrWhiteSpace(imap.DraftsFolder))
+            return NormalizeMailboxPath(imap.DraftsFolder);
+
+        try
+        {
+            var special = client.GetFolder(SpecialFolder.Drafts);
+            if (special is not null && !string.IsNullOrWhiteSpace(special.FullName))
+                return special.FullName;
+        }
+        catch (NotSupportedException)
+        {
+            // Server has no SPECIAL-USE \Drafts mapping.
+        }
+        catch (FolderNotFoundException)
+        {
+            // Mapped but missing — fall through to name candidates.
+        }
+
+        foreach (var candidate in DraftsFolderNameFallbacks)
+        {
+            try
+            {
+                var existing = await GetExistingMailboxAsync(client, candidate, cancellationToken)
+                    .ConfigureAwait(false);
+                if (existing is not null && !string.IsNullOrWhiteSpace(existing.FullName))
+                    return existing.FullName;
+            }
+            catch (FolderNotFoundException)
+            {
+                // try next
+            }
+        }
+
+        return DraftsFolderNameFallbacks[0];
+    }
+
+    internal static readonly string[] DraftsFolderNameFallbacks = ["Drafts", "Entwürfe"];
+
+    internal static async Task<MimeMessage> BuildDraftMimeAsync(
+        EmailSaveDraftRequest request,
+        string fromAddress,
+        MimeMessage? replySource,
+        CancellationToken cancellationToken)
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(fromAddress));
+        AddAddresses(message.To, request.To);
+        AddAddresses(message.Cc, request.Cc);
+        AddAddresses(message.Bcc, request.Bcc);
+
+        var subject = request.Subject?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(subject) && replySource is not null)
+            subject = ResolveReplySubject(null, replySource.Subject);
+        message.Subject = subject;
+
+        if (replySource is not null)
+            ApplyReplyHeaders(message, replySource);
+
+        var textBody = request.TextBody;
+        var htmlBody = request.HtmlBody;
+        if (request.QuoteOriginal && replySource is not null)
+        {
+            textBody = AppendQuotedOriginalText(textBody, replySource);
+            htmlBody = AppendQuotedOriginalHtml(htmlBody, replySource);
+        }
+
+        var builder = new BodyBuilder
+        {
+            TextBody = textBody,
+            HtmlBody = htmlBody
+        };
+
+        if (request.Attachments is { Count: > 0 })
+        {
+            foreach (var attachment in request.Attachments)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (attachment.Content is null || attachment.Content.Length == 0)
+                    continue;
+                var fileName = string.IsNullOrWhiteSpace(attachment.FileName)
+                    ? "attachment"
+                    : attachment.FileName.Trim();
+                ContentType? contentType = null;
+                if (!string.IsNullOrWhiteSpace(attachment.ContentType)
+                    && ContentType.TryParse(attachment.ContentType, out var parsed))
+                {
+                    contentType = parsed;
+                }
+
+                if (contentType is null)
+                    builder.Attachments.Add(fileName, attachment.Content);
+                else
+                    builder.Attachments.Add(fileName, attachment.Content, contentType);
+            }
+        }
+
+        message.Body = builder.ToMessageBody();
+        return message;
+    }
+
+    internal static void ApplyReplyHeaders(MimeMessage draft, MimeMessage original)
+    {
+        // Prefer the raw header so we do not trigger MimeKit's MessageId auto-generation
+        // when the source message never had a Message-ID.
+        var rawId = original.Headers[HeaderId.MessageId];
+        if (string.IsNullOrWhiteSpace(rawId))
+            return;
+
+        var originalId = NormalizeMessageId(rawId);
+        draft.InReplyTo = originalId;
+
+        var references = new List<string>();
+        if (original.References is { Count: > 0 })
+        {
+            foreach (var r in original.References)
+            {
+                if (!string.IsNullOrWhiteSpace(r))
+                    references.Add(NormalizeMessageId(r));
+            }
+        }
+
+        if (!references.Exists(r => string.Equals(
+                NormalizeMessageId(r), originalId, StringComparison.OrdinalIgnoreCase)))
+            references.Add(originalId);
+
+        draft.References.Clear();
+        foreach (var r in references)
+            draft.References.Add(r);
+    }
+
+    /// <summary>MimeKit stores Message-Ids without angle brackets in <c>InReplyTo</c>/<c>References</c>.</summary>
+    internal static string NormalizeMessageId(string messageId)
+    {
+        var id = messageId.Trim();
+        if (id.StartsWith('<') && id.EndsWith('>') && id.Length >= 2)
+            id = id[1..^1];
+        return id;
+    }
+
+    internal static string ResolveReplySubject(string? requestedSubject, string? originalSubject)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedSubject))
+            return requestedSubject.Trim();
+
+        var original = originalSubject?.Trim() ?? string.Empty;
+        if (original.StartsWith("Re:", StringComparison.OrdinalIgnoreCase))
+            return original;
+        return string.IsNullOrEmpty(original) ? "Re:" : "Re: " + original;
+    }
+
+    internal static string AppendQuotedOriginalText(string? body, MimeMessage original)
+    {
+        var from = original.From?.ToString() ?? string.Empty;
+        var header =
+            Environment.NewLine + Environment.NewLine
+            + $"On {original.Date:u}, {from} wrote:" + Environment.NewLine;
+        var quoted = string.Join(
+            Environment.NewLine,
+            (original.TextBody ?? string.Empty)
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Split('\n')
+                .Select(line => "> " + line));
+        return (body ?? string.Empty) + header + quoted;
+    }
+
+    internal static string? AppendQuotedOriginalHtml(string? htmlBody, MimeMessage original)
+    {
+        if (string.IsNullOrWhiteSpace(htmlBody) && string.IsNullOrWhiteSpace(original.HtmlBody)
+            && string.IsNullOrWhiteSpace(original.TextBody))
+            return htmlBody;
+
+        var from = System.Net.WebUtility.HtmlEncode(original.From?.ToString() ?? string.Empty);
+        var quoteHeader = $"<p>On {original.Date:u}, {from} wrote:</p>";
+        var quoteBody = !string.IsNullOrWhiteSpace(original.HtmlBody)
+            ? original.HtmlBody
+            : "<pre>" + System.Net.WebUtility.HtmlEncode(original.TextBody ?? string.Empty) + "</pre>";
+        var block = quoteHeader + "<blockquote>" + quoteBody + "</blockquote>";
+        return string.IsNullOrWhiteSpace(htmlBody) ? block : htmlBody + block;
+    }
+
+    internal static string FormatAddressList(InternetAddressList? list)
+    {
+        if (list is null || list.Count == 0)
+            return string.Empty;
+        return string.Join(", ", list.Select(a => a.ToString()));
+    }
+
+    private static void AddAddresses(InternetAddressList target, string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return;
+
+        foreach (var part in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (MailboxAddress.TryParse(part, out var mailbox))
+                target.Add(mailbox);
+            else
+                throw new ArgumentException($"Invalid email address '{part}'.", nameof(raw));
+        }
     }
 
     private void PreferSafeSasl(IMailService client)
