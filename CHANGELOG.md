@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Shared lib package version **0.1.1** (`Ironbrain.Email` / `Ironbrain.Calendar`).
 
-## [0.1.3] — 2026-10-01
+## [0.1.0] — 2026-10-01
 
 ### Added
 
