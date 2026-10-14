@@ -84,4 +84,19 @@ public interface IEmailService
         string? userId = null,
         CancellationToken cancellationToken = default,
         string? accountId = null);
+
+    /// <summary>
+    /// Appends a draft MIME message into the account Drafts folder with the <c>\Draft</c> flag.
+    /// From is the IMAP account identity (<see cref="ImapOptions.Username"/>), never SMTP send-as.
+    /// Drafts folder: request override → <see cref="ImapOptions.DraftsFolder"/> → SPECIAL-USE <c>\Drafts</c>
+    /// → name fallbacks <c>Drafts</c> / <c>Entwürfe</c> (created when missing).
+    /// When <see cref="EmailSaveDraftRequest.ReplyToMessageId"/> is set, loads that message for
+    /// In-Reply-To / References and optional <c>Re:</c> subject / quote.
+    /// </summary>
+    /// <param name="accountId">Optional host account id; null → first mail config. IMAP side only.</param>
+    Task<EmailSaveDraftResult> SaveDraftAsync(
+        EmailSaveDraftRequest request,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null);
 }
