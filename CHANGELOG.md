@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Versions
 
-- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs **0.1.6**).
+- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**
+  (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs/tools **0.1.6** — tools must bump so nuget.org `--skip-duplicate` does not silently skip).
 
 ## [0.1.6] — 2026-10-20
 
