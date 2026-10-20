@@ -189,10 +189,9 @@ public sealed partial class CalDavCalendarService
             }
         }
 
-        var first = resources[0];
-        if (string.IsNullOrWhiteSpace(first.Href))
-            throw new InvalidOperationException($"CalDAV resource for UID '{uid}' has no href.");
-        return first;
+        // CalDAV text-match is a substring match by default; never fall back to a resource
+        // whose UID differs, or update/delete could hit the wrong event.
+        throw new InvalidOperationException($"No CalDAV resource with exact UID '{uid}' found in calendar '{collectionUrl}'.");
     }
 
     private async Task PutCalendarResourceAsync(
@@ -368,8 +367,17 @@ public sealed partial class CalDavCalendarService
     private static CalDateTime ToOccurrenceCalDateTime(DateTime occurrenceStartUtc, CalendarEvent master)
     {
         var utc = AsUtcComparable(occurrenceStartUtc);
-        if (!string.IsNullOrEmpty(master.Start?.TzId))
-            return new CalDateTime(DateTime.SpecifyKind(utc, DateTimeKind.Unspecified), master.Start.TzId);
+        var tzId = master.Start?.TzId;
+        if (!string.IsNullOrEmpty(tzId) && !string.Equals(tzId, "UTC", StringComparison.OrdinalIgnoreCase))
+        {
+            // RECURRENCE-ID / EXDATE must use the master's DTSTART zone: convert the UTC
+            // occurrence start to wall-clock time in that zone (not just relabel it).
+            if (TimeZoneInfo.TryFindSystemTimeZoneById(tzId, out var tz))
+            {
+                var local = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+                return new CalDateTime(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), tzId);
+            }
+        }
         return new CalDateTime(utc, "UTC");
     }
 

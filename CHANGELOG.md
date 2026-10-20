@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - List results populate `Href`, `ETag`, `RecurrenceId`, `IsRecurring` so clients can target a single occurrence.
 - CLI: `cal update` / `cal delete`; MCP: `update_appointment` / `delete_appointment`.
 
+### Fixed (review)
+
+- Update/delete no longer fall back to a non-matching resource when the CalDAV UID text-match (substring) returns no exact UID match.
+- Occurrence RECURRENCE-ID / EXDATE for TZID masters converts the UTC occurrence start to the master zone's wall-clock time.
+
 ### Changed
 
 - Shared lib package version **0.1.2** (`Ironbrain.Calendar`); tools **0.1.4**.

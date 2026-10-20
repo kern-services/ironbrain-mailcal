@@ -972,6 +972,128 @@ public class CalDavCalendarServiceTests
         }
     }
 
+    [Fact]
+    public async Task DeleteAppointment_SingleOccurrence_TzidMaster_ConvertsUtcToWallClock()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:recur-tz@ironbrain
+            DTSTART;TZID=Europe/Berlin:20261020T160000
+            DTEND;TZID=Europe/Berlin:20261020T170000
+            RRULE:FREQ=WEEKLY;COUNT=3
+            SUMMARY:Weekly
+            SEQUENCE:0
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var (putBody, deleteCalled) = await RunMutationAsync(ics, "/Calendar/personal/recur-tz.ics", (sut, collection) =>
+            sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+            {
+                Uid = "recur-tz@ironbrain",
+                CalendarUrl = collection,
+                // 2026-10-27 16:00 Berlin (CET, UTC+1) == 15:00Z
+                RecurrenceId = new DateTime(2026, 10, 27, 15, 0, 0, DateTimeKind.Utc)
+            }));
+
+        Assert.False(deleteCalled);
+        Assert.NotNull(putBody);
+        Assert.Contains("EXDATE;TZID=Europe/Berlin:20261027T160000", putBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteAppointment_UidSubstringMatchOnly_ThrowsAndDoesNotDelete()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:abc-123@ironbrain
+            DTSTART:20261020T100000Z
+            DTEND:20261020T110000Z
+            SUMMARY:Other event
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? putBody = null;
+        var deleteCalled = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            (putBody, deleteCalled) = await RunMutationAsync(ics, "/Calendar/personal/other.ics", (sut, collection) =>
+                sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+                {
+                    Uid = "abc",
+                    CalendarUrl = collection
+                }));
+        });
+        Assert.Null(putBody);
+        Assert.False(deleteCalled);
+    }
+
+    private static async Task<(string? PutBody, bool DeleteCalled)> RunMutationAsync(
+        string ics,
+        string href,
+        Func<CalDavCalendarService, string, Task<string>> mutate)
+    {
+        string? putBody = null;
+        var deleteCalled = false;
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var bytes = Encoding.UTF8.GetBytes(BuildReportMultistatus(href, "\"e1\"", ics));
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                    putBody = await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = 204;
+                }
+                else if (ctx.Request.HttpMethod == "DELETE")
+                {
+                    deleteCalled = true;
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            await mutate(sut, collection);
+            return (putBody, deleteCalled);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
     private static CalDavCalendarService CreateSut(string? sourceUrl = null, string? homeUrl = null, string? defaultWrite = null)
     {
         var options = Options.Create(new CalendarOptions
