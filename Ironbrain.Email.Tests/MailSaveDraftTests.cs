@@ -71,6 +71,126 @@ public class MailSaveDraftTests
         Assert.Contains("bare@example.com", draft.References);
     }
 
+    [Theory]
+    [InlineData("<bare@example.com>", "bare@example.com")]
+    [InlineData("[bare@example.com]", "[bare@example.com]")]
+    [InlineData("<[bare@example.com]>", "[bare@example.com]")]
+    [InlineData("bare@example.com", "bare@example.com")]
+    public void NormalizeMessageId_StripsOnlyOuterAngleBrackets(string input, string expected)
+    {
+        Assert.Equal(expected, MailKitEmailService.NormalizeMessageId(input));
+    }
+
+    [Theory]
+    [InlineData("<[312dd034055449fc9a067c80b86f6f85-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]>")]
+    [InlineData("[312dd034055449fc9a067c80b86f6f85-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]")]
+    public void ApplyReplyHeaders_ExchangeMessageId_WriteAndReparse_MatchesOriginalMessageId(string rawMessageId)
+    {
+        // Exchange [id@microsoft.com] *is* the Message-Id (MimeKit MessageId == "[id]").
+        // Writing In-Reply-To: <[id]> matches the original for threading — do not strip [].
+        var original = LoadMimeWithHeaders(
+            $"Message-ID: {rawMessageId}\r\n",
+            body: "original");
+        Assert.StartsWith("[", original.MessageId);
+        Assert.EndsWith("]", original.MessageId);
+
+        var draft = new MimeMessage();
+        draft.From.Add(MailboxAddress.Parse("a@example.com"));
+        draft.To.Add(MailboxAddress.Parse("b@example.com"));
+        MailKitEmailService.ApplyReplyHeaders(draft, original);
+        draft.Body = new TextPart("plain") { Text = "reply" };
+
+        Assert.Equal(original.MessageId, draft.InReplyTo);
+        Assert.Equal("<" + original.MessageId + ">", draft.Headers[HeaderId.InReplyTo]);
+
+        var parsed = WriteAndReload(draft);
+        Assert.Equal(original.MessageId, parsed.InReplyTo);
+        Assert.Contains(original.MessageId!, parsed.References);
+        Assert.Equal("<" + original.MessageId + ">", parsed.Headers[HeaderId.InReplyTo]);
+    }
+
+    [Fact]
+    public void ApplyReplyHeaders_PreservesPriorBracketedReferencesVerbatim()
+    {
+        const string root = "[root-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]";
+        const string child = "[child-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]";
+
+        var original = LoadMimeWithHeaders(
+            $"Message-ID: {child}\r\nReferences: <{root}>\r\n",
+            body: "original");
+        Assert.Equal(new[] { root }, original.References.ToArray());
+
+        var draft = new MimeMessage();
+        draft.From.Add(MailboxAddress.Parse("a@example.com"));
+        draft.To.Add(MailboxAddress.Parse("b@example.com"));
+        MailKitEmailService.ApplyReplyHeaders(draft, original);
+        draft.Body = new TextPart("plain") { Text = "reply" };
+
+        Assert.Equal(new[] { root, child }, draft.References.ToArray());
+        var parsed = WriteAndReload(draft);
+        Assert.Equal(new[] { root, child }, parsed.References.ToArray());
+        Assert.Equal(child, parsed.InReplyTo);
+    }
+
+    [Fact]
+    public void ApplyReplyHeaders_LongReferences_FoldsUnder998_KeepsAllIdsInOrder()
+    {
+        var prior = new List<string>();
+        for (var i = 0; i < 20; i++)
+        {
+            prior.Add(
+                $"[{new string('a', 40)}{i:D4}-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]");
+        }
+
+        var original = new MimeMessage();
+        original.Headers[HeaderId.MessageId] = prior[^1];
+        foreach (var id in prior.Take(prior.Count - 1))
+            original.References.Add(id);
+
+        var draft = new MimeMessage();
+        draft.From.Add(MailboxAddress.Parse("a@example.com"));
+        draft.To.Add(MailboxAddress.Parse("b@example.com"));
+        MailKitEmailService.ApplyReplyHeaders(draft, original);
+        draft.Body = new TextPart("plain") { Text = "reply" };
+
+        Assert.Equal(prior, draft.References.ToArray());
+
+        using var ms = new MemoryStream();
+        draft.WriteTo(ms);
+        var raw = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+        var refsIdx = raw.IndexOf("References:", StringComparison.Ordinal);
+        Assert.True(refsIdx >= 0);
+        var headerEnd = raw.IndexOf("\n\n", refsIdx, StringComparison.Ordinal);
+        if (headerEnd < 0)
+            headerEnd = raw.IndexOf("\r\n\r\n", refsIdx, StringComparison.Ordinal);
+        Assert.True(headerEnd > refsIdx);
+        var refsBlock = raw[refsIdx..headerEnd].Replace("\r\n", "\n");
+        foreach (var line in refsBlock.Split('\n'))
+            Assert.True(line.Length <= 998, $"References fold line length {line.Length} > 998");
+
+        ms.Position = 0;
+        var parsed = MimeMessage.Load(ms);
+        Assert.Equal(prior, parsed.References.ToArray());
+    }
+
+    [Fact]
+    public void MimeKit_DropsBareExchangeReferencesWithoutAngleBrackets()
+    {
+        // Should-fix documentation: raw References: [id] (no <>) is dropped on write.
+        // ApplyReplyHeaders uses MessageIdList.Add so MimeKit emits <[id]> instead.
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse("a@example.com"));
+        message.To.Add(MailboxAddress.Parse("b@example.com"));
+        message.Headers[HeaderId.References] =
+            "[root@microsoft.com] [child@microsoft.com]";
+        message.Body = new TextPart("plain") { Text = "x" };
+
+        Assert.Empty(message.References);
+        var parsed = WriteAndReload(message);
+        Assert.Empty(parsed.References);
+        Assert.True(string.IsNullOrEmpty(parsed.Headers[HeaderId.References]));
+    }
+
     [Fact]
     public void ApplyReplyHeaders_NoOpWhenOriginalHasNoMessageIdHeader()
     {
@@ -81,6 +201,28 @@ public class MailSaveDraftTests
         MailKitEmailService.ApplyReplyHeaders(draft, original);
         Assert.True(string.IsNullOrEmpty(draft.InReplyTo));
         Assert.Empty(draft.References);
+    }
+
+    static MimeMessage LoadMimeWithHeaders(string extraHeaders, string body)
+    {
+        var raw =
+            "From: a@example.com\r\n" +
+            "To: b@example.com\r\n" +
+            "Subject: t\r\n" +
+            extraHeaders +
+            "MIME-Version: 1.0\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "\r\n" +
+            body + "\r\n";
+        return MimeMessage.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(raw)));
+    }
+
+    static MimeMessage WriteAndReload(MimeMessage message)
+    {
+        using var ms = new MemoryStream();
+        message.WriteTo(ms);
+        ms.Position = 0;
+        return MimeMessage.Load(ms);
     }
 
     [Fact]

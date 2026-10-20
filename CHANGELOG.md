@@ -21,10 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`since` inclusive, `before` exclusive — matches CLI/MCP docs).
 - Bulk move/archive `MovedCount` / `Ids` report UIDPLUS-mapped source UIDs actually moved (not the requested count).
 
+### Clarified (SaveDraft reply threading — no lib bump)
+
+- Exchange / NuGet `Message-ID: [id@microsoft.com]` **is** the Message-Id (MimeKit `MessageId` == `[id]`).
+  `NormalizeMessageId` strips only outer RFC `<…>`; **never** `[]`. SaveDraft writes `In-Reply-To` /
+  `References` as `<[id]>` so threading matches the original (0.1.6 behaviour). Prior References entries
+  are copied verbatim (brackets included). `get_email` still returns MimeKit tokens without outer `<>`
+  — seeing `[id]` in JSON is expected; wrapping in `<>` would be display-only.
+- Regression tests: write/reparse Exchange `<[id]>` / bare `[id]`, prior bracketed References, long
+  References folding (≤998), and MimeKit dropping bare `[id]` References without `<>`.
+
 ### Versions
 
+<<<<<<< HEAD
 - **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**
   (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs/tools **0.1.6** — tools must bump so nuget.org `--skip-duplicate` does not silently skip).
+=======
+- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (same as [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13); this PR stacks on #13 — **no 0.1.8 bump**).
+- Merge order: **#13 first**, then this tip.
+>>>>>>> b78de6c (test(email): lock SaveDraft Exchange [] Message-Id threading)
 
 ## [0.1.6] — 2026-10-20
 
