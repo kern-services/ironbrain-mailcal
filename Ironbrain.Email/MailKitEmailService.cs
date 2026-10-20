@@ -7,7 +7,9 @@ using MailKit.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text.RegularExpressions;
 using MimeKit;
+using MimeKit.Text;
 
 namespace Ironbrain.Email;
 
@@ -1175,8 +1177,10 @@ public sealed class MailKitEmailService(
         var htmlBody = request.HtmlBody;
         if (request.QuoteOriginal && replySource is not null)
         {
+            // Pass the unquoted reply text into the HTML path so a text-only reply
+            // becomes a real HTML part before the blockquote (not quote-only).
+            htmlBody = AppendQuotedOriginalHtml(htmlBody, textBody, replySource);
             textBody = AppendQuotedOriginalText(textBody, replySource);
-            htmlBody = AppendQuotedOriginalHtml(htmlBody, replySource);
         }
 
         var builder = new BodyBuilder
@@ -1269,28 +1273,128 @@ public sealed class MailKitEmailService(
         var header =
             Environment.NewLine + Environment.NewLine
             + $"On {original.Date:u}, {from} wrote:" + Environment.NewLine;
+        var originalText = ResolveOriginalPlainText(original);
         var quoted = string.Join(
             Environment.NewLine,
-            (original.TextBody ?? string.Empty)
+            originalText
                 .Replace("\r\n", "\n", StringComparison.Ordinal)
                 .Split('\n')
                 .Select(line => "> " + line));
         return (body ?? string.Empty) + header + quoted;
     }
 
-    internal static string? AppendQuotedOriginalHtml(string? htmlBody, MimeMessage original)
+    /// <summary>
+    /// Builds the HTML part for a quoted reply. When <paramref name="htmlBody"/> is empty,
+    /// falls back to an HTML-encoded form of <paramref name="textBody"/> so the reply is not
+    /// quote-only. Quotes only the original <c>&lt;body&gt;</c> inner HTML (never a full document).
+    /// </summary>
+    internal static string? AppendQuotedOriginalHtml(
+        string? htmlBody,
+        string? textBody,
+        MimeMessage original)
     {
-        if (string.IsNullOrWhiteSpace(htmlBody) && string.IsNullOrWhiteSpace(original.HtmlBody)
+        if (string.IsNullOrWhiteSpace(htmlBody)
+            && string.IsNullOrWhiteSpace(textBody)
+            && string.IsNullOrWhiteSpace(original.HtmlBody)
             && string.IsNullOrWhiteSpace(original.TextBody))
             return htmlBody;
+
+        var replyHtml = !string.IsNullOrWhiteSpace(htmlBody)
+            ? htmlBody
+            : (!string.IsNullOrWhiteSpace(textBody) ? PlainTextToHtml(textBody) : null);
 
         var from = System.Net.WebUtility.HtmlEncode(original.From?.ToString() ?? string.Empty);
         var quoteHeader = $"<p>On {original.Date:u}, {from} wrote:</p>";
         var quoteBody = !string.IsNullOrWhiteSpace(original.HtmlBody)
-            ? original.HtmlBody
+            ? ExtractHtmlBodyInner(original.HtmlBody)
             : "<pre>" + System.Net.WebUtility.HtmlEncode(original.TextBody ?? string.Empty) + "</pre>";
-        var block = quoteHeader + "<blockquote>" + quoteBody + "</blockquote>";
-        return string.IsNullOrWhiteSpace(htmlBody) ? block : htmlBody + block;
+        var block = quoteHeader + "<blockquote type=\"cite\">" + quoteBody + "</blockquote>";
+        return string.IsNullOrWhiteSpace(replyHtml) ? block : replyHtml + block;
+    }
+
+    /// <summary>HTML-encode plain text, map newlines to <c>&lt;br&gt;</c>, wrap in <c>&lt;div&gt;</c>.</summary>
+    internal static string PlainTextToHtml(string text)
+    {
+        var encoded = System.Net.WebUtility.HtmlEncode(text)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace("\n", "<br>", StringComparison.Ordinal);
+        return "<div>" + encoded + "</div>";
+    }
+
+    /// <summary>
+    /// Returns the original message's plain text, converting HTML-only bodies via MimeKit
+    /// <see cref="TextConverter"/> so text quotes are not empty.
+    /// </summary>
+    internal static string ResolveOriginalPlainText(MimeMessage original)
+    {
+        if (!string.IsNullOrWhiteSpace(original.TextBody))
+            return original.TextBody;
+        if (string.IsNullOrWhiteSpace(original.HtmlBody))
+            return string.Empty;
+        return HtmlToPlainText(original.HtmlBody);
+    }
+
+    /// <summary>
+    /// Convert HTML to plain text via MimeKit <see cref="HtmlTokenizer"/> (MimeKit 4.x has no
+    /// dedicated HtmlToText converter class).
+    /// </summary>
+    internal static string HtmlToPlainText(string html)
+    {
+        using var reader = new StringReader(html);
+        var tokenizer = new HtmlTokenizer(reader) { DecodeCharacterReferences = true };
+        var sb = new System.Text.StringBuilder();
+        while (tokenizer.ReadNextToken(out var token))
+        {
+            switch (token)
+            {
+                case HtmlDataToken data:
+                    sb.Append(data.Data);
+                    break;
+                case HtmlTagToken { Id: HtmlTagId.Br }:
+                    sb.AppendLine();
+                    break;
+                case HtmlTagToken { IsEndTag: true, Id: HtmlTagId.P or HtmlTagId.Div
+                    or HtmlTagId.H1 or HtmlTagId.H2 or HtmlTagId.H3
+                    or HtmlTagId.H4 or HtmlTagId.H5 or HtmlTagId.H6 }:
+                    sb.AppendLine();
+                    break;
+            }
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Prefer <c>&lt;body&gt;</c> inner HTML; otherwise strip doctype / html / head wrappers
+    /// so a full document is never pasted inside a blockquote.
+    /// </summary>
+    internal static string ExtractHtmlBodyInner(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return string.Empty;
+
+        var bodyMatch = Regex.Match(
+            html,
+            @"<body\b[^>]*>(.*)</body>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        if (bodyMatch.Success)
+            return bodyMatch.Groups[1].Value.Trim();
+
+        var cleaned = Regex.Replace(
+            html, @"<!DOCTYPE[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        cleaned = Regex.Replace(
+            cleaned, @"</?html\b[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        cleaned = Regex.Replace(
+            cleaned,
+            @"<head\b[^>]*>.*?</head>",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        cleaned = Regex.Replace(
+            cleaned, @"</?body\b[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        cleaned = Regex.Replace(
+            cleaned, @"<meta\b[^>]*/?>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return cleaned.Trim();
     }
 
     internal static string FormatAddressList(InternetAddressList? list)
