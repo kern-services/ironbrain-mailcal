@@ -57,4 +57,23 @@ public interface ICalendarService
         CalendarAddRequest request,
         string? userId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Partially updates an existing VEVENT (keyed by UID + calendar). Uses CalDAV PUT with If-Match/ETag
+    /// and bumps SEQUENCE. When <see cref="CalendarUpdateRequest.RecurrenceId"/> is set, writes a
+    /// RECURRENCE-ID override for that occurrence; otherwise updates the whole series.
+    /// </summary>
+    Task<string> UpdateAppointmentAsync(
+        CalendarUpdateRequest request,
+        string? userId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes an existing event (keyed by UID + calendar). Whole series → HTTP DELETE;
+    /// single occurrence → EXDATE (or remove RECURRENCE-ID override) with If-Match/ETag.
+    /// </summary>
+    Task<string> DeleteAppointmentAsync(
+        CalendarDeleteRequest request,
+        string? userId = null,
+        CancellationToken cancellationToken = default);
 }

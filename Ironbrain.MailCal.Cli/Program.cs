@@ -382,6 +382,84 @@ calAdd.SetAction(async (parseResult, ct) =>
 });
 cal.Subcommands.Add(calAdd);
 
+var uidOpt = new Option<string>("--uid") { Description = "iCalendar UID from cal list" };
+uidOpt.Validators.Add(r => { if (string.IsNullOrWhiteSpace(r.GetValueOrDefault<string>())) r.AddError("--uid is required"); });
+var recurrenceIdOpt = new Option<string?>("--recurrence-id")
+{
+    Description = "Occurrence start (ISO 8601) to update/delete a single instance; omit for whole series"
+};
+var etagOpt = new Option<string?>("--etag") { Description = "Optional If-Match ETag (fetched when omitted)" };
+var updateSummaryOpt = new Option<string?>("--summary") { Description = "New title (omit to leave unchanged)" };
+var updateStartOpt = new Option<string?>("--start") { Description = "New start (omit to leave unchanged)" };
+var updateEndOpt = new Option<string?>("--end") { Description = "New end (omit to leave unchanged)" };
+
+var calUpdate = new Command("update", "Partial-update an appointment via CalDAV PUT (If-Match/ETag; bumps SEQUENCE)");
+calUpdate.Options.Add(uidOpt);
+calUpdate.Options.Add(writeCalendarOpt);
+calUpdate.Options.Add(calUrlOpt);
+calUpdate.Options.Add(updateSummaryOpt);
+calUpdate.Options.Add(updateStartOpt);
+calUpdate.Options.Add(updateEndOpt);
+calUpdate.Options.Add(locationOpt);
+calUpdate.Options.Add(descOpt);
+calUpdate.Options.Add(tzOpt);
+calUpdate.Options.Add(recurrenceIdOpt);
+calUpdate.Options.Add(etagOpt);
+calUpdate.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (_, calendar, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt: null);
+        var summary = parseResult.GetValue(updateSummaryOpt);
+        var startRaw = parseResult.GetValue(updateStartOpt);
+        var endRaw = parseResult.GetValue(updateEndOpt);
+        var ridRaw = parseResult.GetValue(recurrenceIdOpt);
+        var result = await calendar.UpdateAppointmentAsync(new CalendarUpdateRequest
+        {
+            Uid = parseResult.GetValue(uidOpt)!,
+            CalendarSelector = parseResult.GetValue(writeCalendarOpt),
+            CalendarUrl = parseResult.GetValue(calUrlOpt),
+            Summary = string.IsNullOrWhiteSpace(summary) ? null : summary,
+            Start = string.IsNullOrWhiteSpace(startRaw) ? null : CalDavCalendarService.ParseDateTime(startRaw!, "start"),
+            End = string.IsNullOrWhiteSpace(endRaw) ? null : CalDavCalendarService.ParseDateTime(endRaw!, "end"),
+            Location = parseResult.GetValue(locationOpt),
+            Description = parseResult.GetValue(descOpt),
+            TimeZoneId = parseResult.GetValue(tzOpt),
+            RecurrenceId = string.IsNullOrWhiteSpace(ridRaw) ? null : CalDavCalendarService.ParseDateTime(ridRaw!, "recurrence-id"),
+            ETag = parseResult.GetValue(etagOpt)
+        }, userId: null, ct);
+        Console.WriteLine($"{result} (account={account.Name})");
+    }
+});
+cal.Subcommands.Add(calUpdate);
+
+var calDelete = new Command("delete", "Delete an appointment (whole series) or one occurrence (EXDATE / cancel override)");
+calDelete.Options.Add(uidOpt);
+calDelete.Options.Add(writeCalendarOpt);
+calDelete.Options.Add(calUrlOpt);
+calDelete.Options.Add(recurrenceIdOpt);
+calDelete.Options.Add(etagOpt);
+calDelete.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (_, calendar, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt: null);
+        var ridRaw = parseResult.GetValue(recurrenceIdOpt);
+        var result = await calendar.DeleteAppointmentAsync(new CalendarDeleteRequest
+        {
+            Uid = parseResult.GetValue(uidOpt)!,
+            CalendarSelector = parseResult.GetValue(writeCalendarOpt),
+            CalendarUrl = parseResult.GetValue(calUrlOpt),
+            RecurrenceId = string.IsNullOrWhiteSpace(ridRaw) ? null : CalDavCalendarService.ParseDateTime(ridRaw!, "recurrence-id"),
+            ETag = parseResult.GetValue(etagOpt)
+        }, userId: null, ct);
+        Console.WriteLine($"{result} (account={account.Name})");
+    }
+});
+cal.Subcommands.Add(calDelete);
+
 var configShow = new Command("config", "Configuration helpers");
 var configPathCmd = new Command("path", "Print the config file that would be used");
 configPathCmd.SetAction(parseResult =>

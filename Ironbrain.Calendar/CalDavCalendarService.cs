@@ -16,7 +16,7 @@ namespace Ironbrain.Calendar;
 /// CalDAV (RFC 4791) and plain iCalendar feed client for arbitrary self-hosted servers.
 /// Supports multi-calendar discovery (PROPFIND) and merged REPORT queries.
 /// </summary>
-public sealed class CalDavCalendarService(
+public sealed partial class CalDavCalendarService(
     IHttpClientFactory httpClientFactory,
     IOptions<CalendarOptions> options,
     IServiceProvider serviceProvider,
@@ -437,28 +437,39 @@ public sealed class CalDavCalendarService(
         }
 
         var reportXml = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        var icsParts = ExtractCalendarDataFromMultistatus(reportXml).ToList();
-        if (icsParts.Count == 0)
+        var resources = ExtractCalendarResourcesFromMultistatus(reportXml, reportUrl).ToList();
+        if (resources.Count == 0)
         {
             logger.LogInformation("CalDAV report returned no calendar data for range {Start:O} to {End:O}", rangeStart, rangeEnd);
             return [];
         }
 
-        return ParseOccurrences(icsParts, rangeStart, rangeEnd, calendarMeta);
+        return ParseOccurrences(resources, rangeStart, rangeEnd, calendarMeta);
     }
 
     private IReadOnlyList<CalendarAppointment> ParseOccurrences(
         IEnumerable<string> icsParts,
         DateTime rangeStart,
         DateTime rangeEnd,
+        CalendarCollectionInfo? calendarMeta) =>
+        ParseOccurrences(
+            icsParts.Select(ics => new CalDavResource(Href: null, ETag: null, CalendarData: ics)),
+            rangeStart,
+            rangeEnd,
+            calendarMeta);
+
+    private IReadOnlyList<CalendarAppointment> ParseOccurrences(
+        IEnumerable<CalDavResource> resources,
+        DateTime rangeStart,
+        DateTime rangeEnd,
         CalendarCollectionInfo? calendarMeta)
     {
         var searchStart = ToCalDateTime(rangeStart);
         var rangeEndCmp = AsUnspecifiedOrUtc(rangeEnd);
-        var occurrences = new List<(Ical.Net.DataTypes.Occurrence Occ, CalendarEvent? Evt)>();
-        foreach (var ics in icsParts)
+        var occurrences = new List<(Ical.Net.DataTypes.Occurrence Occ, CalendarEvent? Evt, string? Href, string? ETag)>();
+        foreach (var resource in resources)
         {
-            var calendar = IcalCalendar.Load(ics);
+            var calendar = IcalCalendar.Load(resource.CalendarData);
             if (calendar?.Events is null)
                 continue;
             foreach (var ev in calendar.Events)
@@ -471,7 +482,7 @@ public sealed class CalDavCalendarService(
                         .TakeWhile(o => o.Period?.StartTime?.Value is { } t
                             && AsUnspecifiedOrUtc(t) < rangeEndCmp);
                     foreach (var occ in evOccurrences)
-                        occurrences.Add((occ, calEvt));
+                        occurrences.Add((occ, calEvt, resource.Href, resource.ETag));
                 }
                 catch (Ical.Net.Evaluation.EvaluationOutOfRangeException ex)
                 {
@@ -481,7 +492,7 @@ public sealed class CalDavCalendarService(
         }
 
         var list = new List<CalendarAppointment>();
-        foreach (var (occ, evt) in occurrences)
+        foreach (var (occ, evt, href, etag) in occurrences)
         {
             var startTime = occ.Period?.StartTime;
             var endTime = occ.Period?.EndTime;
@@ -494,6 +505,13 @@ public sealed class CalDavCalendarService(
             else
                 endDt = startDt;
 
+            var isRecurring = IsRecurringEvent(evt);
+            DateTime? recurrenceId = null;
+            if (GetRecurrenceIdUtc(evt) is { } explicitRid)
+                recurrenceId = explicitRid;
+            else if (isRecurring)
+                recurrenceId = startDt;
+
             list.Add(new CalendarAppointment
             {
                 Summary = evt?.Summary ?? "(no title)",
@@ -502,6 +520,10 @@ public sealed class CalDavCalendarService(
                 Location = evt?.Location ?? string.Empty,
                 Description = evt?.Description ?? string.Empty,
                 Uid = evt?.Uid,
+                Href = href,
+                ETag = etag,
+                RecurrenceId = recurrenceId,
+                IsRecurring = isRecurring,
                 CalendarName = calendarMeta?.DisplayName,
                 CalendarId = calendarMeta?.CollectionId,
                 CalendarHref = calendarMeta?.Href
@@ -510,6 +532,28 @@ public sealed class CalDavCalendarService(
 
         list.Sort((a, b) => a.Start.CompareTo(b.Start));
         return list;
+    }
+
+    private static bool IsRecurringEvent(CalendarEvent? evt)
+    {
+        if (evt is null)
+            return false;
+        if (GetRecurrenceIdUtc(evt) is not null)
+            return true;
+        if (evt.RecurrenceRules is { Count: > 0 })
+            return true;
+        return evt.RecurrenceDates?.GetAllDates()?.Any() == true;
+    }
+
+    internal static DateTime? GetRecurrenceIdUtc(CalendarEvent? evt)
+    {
+        if (evt is null)
+            return null;
+        if (evt.RecurrenceIdentifier?.StartTime?.AsUtc is { } fromIdentifier)
+            return fromIdentifier;
+#pragma warning disable CS0618 // RecurrenceId obsolete but still populated by some parsers
+        return evt.RecurrenceId?.AsUtc;
+#pragma warning restore CS0618
     }
 
     internal static CalDateTime ToCalDateTime(DateTime value) =>
@@ -593,17 +637,66 @@ public sealed class CalDavCalendarService(
         return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" + query.ToString(SaveOptions.OmitDuplicateNamespaces);
     }
 
-    private static IEnumerable<string> ExtractCalendarDataFromMultistatus(string multistatusXml)
+    private static IEnumerable<string> ExtractCalendarDataFromMultistatus(string multistatusXml) =>
+        ExtractCalendarResourcesFromMultistatus(multistatusXml, baseUrl: null)
+            .Select(r => r.CalendarData);
+
+    internal static IEnumerable<CalDavResource> ExtractCalendarResourcesFromMultistatus(
+        string multistatusXml,
+        string? baseUrl)
     {
         var doc = XDocument.Parse(multistatusXml);
-        foreach (var calData in doc.Descendants(CalDav + "calendar-data"))
+        foreach (var response in doc.Descendants(Dav + "response"))
         {
-            var value = calData.Value;
-            if (string.IsNullOrWhiteSpace(value))
+            var hrefRaw = response.Element(Dav + "href")?.Value?.Trim();
+            string? etag = null;
+            string? calendarData = null;
+            foreach (var propstat in response.Elements(Dav + "propstat"))
+            {
+                var prop = propstat.Element(Dav + "prop");
+                if (prop is null)
+                    continue;
+                etag ??= prop.Element(Dav + "getetag")?.Value?.Trim();
+                var data = prop.Element(CalDav + "calendar-data")?.Value;
+                if (!string.IsNullOrWhiteSpace(data))
+                    calendarData = data.Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(calendarData))
                 continue;
-            yield return value.Trim();
+
+            var href = ResolveResourceHref(baseUrl, hrefRaw);
+            yield return new CalDavResource(href, NormalizeETag(etag), calendarData);
         }
     }
+
+    internal static string? ResolveResourceHref(string? baseUrl, string? hrefRaw)
+    {
+        if (string.IsNullOrWhiteSpace(hrefRaw))
+            return null;
+
+        // On Unix, UriKind.Absolute treats "/Calendar/…" as a file:// path — only accept http(s).
+        if (Uri.TryCreate(hrefRaw, UriKind.Absolute, out var absolute)
+            && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
+        {
+            return absolute.ToString();
+        }
+
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            return hrefRaw;
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
+            return hrefRaw;
+        return new Uri(baseUri, hrefRaw).ToString();
+    }
+
+    internal static string? NormalizeETag(string? etag)
+    {
+        if (string.IsNullOrWhiteSpace(etag))
+            return null;
+        return etag.Trim();
+    }
+
+    internal readonly record struct CalDavResource(string? Href, string? ETag, string CalendarData);
 
     private static string BuildIcsForNewEvent(string summary, DateTime start, DateTime end, string location, string description, string? timeZoneId)
     {
