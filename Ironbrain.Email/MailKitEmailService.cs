@@ -2,6 +2,7 @@ using System.Net.Security;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Net.Smtp;
+using MailKit.Search;
 using MailKit.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -70,14 +71,18 @@ public sealed class MailKitEmailService(
         return null;
     }
 
-    public async Task<IReadOnlyList<EmailSummary>> ListInboxAsync(
+    public async Task<EmailListResult> ListInboxAsync(
         int limit = 20,
         int offset = 0,
         string? userId = null,
         CancellationToken cancellationToken = default,
         string? mailbox = null,
-        string? accountId = null)
+        string? accountId = null,
+        EmailListFilter? filter = null)
     {
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var clampedOffset = Math.Max(0, offset);
+
         var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
         EnsureImapConfigured(imap);
         var folderName = ResolveMailbox(imap, mailbox);
@@ -88,31 +93,111 @@ public sealed class MailKitEmailService(
         var inbox = await GetExistingMailboxAsync(client, folderName, timeoutCts.Token).ConfigureAwait(false);
         await inbox.OpenAsync(FolderAccess.ReadOnly, timeoutCts.Token);
 
-        var messageCount = inbox.Count;
-        var start = Math.Max(0, messageCount - offset - limit);
-        var end = Math.Max(-1, messageCount - offset - 1);
-        if (messageCount == 0 || end < 0 || start > end)
+        var fetchRequest = new FetchRequest(
+            MessageSummaryItems.Envelope
+            | MessageSummaryItems.UniqueId
+            | MessageSummaryItems.Flags
+            | MessageSummaryItems.InternalDate);
+
+        IReadOnlyList<EmailSummary> items;
+        int totalCount;
+
+        if (filter is { HasAny: true })
         {
-            await client.DisconnectAsync(true, timeoutCts.Token);
-            return [];
+            var query = BuildListSearchQuery(filter);
+            var uids = await inbox.SearchAsync(query, timeoutCts.Token).ConfigureAwait(false);
+            // Newest-first: higher UIDs are typically newer; fall back to InternalDate after fetch.
+            var ordered = uids.OrderByDescending(u => u.Id).ToList();
+            totalCount = ordered.Count;
+            if (totalCount == 0 || clampedOffset >= totalCount)
+            {
+                items = [];
+            }
+            else
+            {
+                var pageUids = ordered.Skip(clampedOffset).Take(clampedLimit).ToList();
+                var summaries = await inbox.FetchAsync(pageUids, fetchRequest, timeoutCts.Token)
+                    .ConfigureAwait(false);
+                items = summaries
+                    .OrderByDescending(s => s.InternalDate)
+                    .ThenByDescending(s => s.UniqueId.Id)
+                    .Select(ToEmailSummary)
+                    .ToList();
+            }
+        }
+        else
+        {
+            totalCount = inbox.Count;
+            var start = Math.Max(0, totalCount - clampedOffset - clampedLimit);
+            var end = Math.Max(-1, totalCount - clampedOffset - 1);
+            if (totalCount == 0 || end < 0 || start > end)
+            {
+                items = [];
+            }
+            else
+            {
+                var summaries = await inbox.FetchAsync(start, end, fetchRequest, timeoutCts.Token)
+                    .ConfigureAwait(false);
+                items = summaries
+                    .OrderByDescending(s => s.InternalDate)
+                    .ThenByDescending(s => s.UniqueId.Id)
+                    .Select(ToEmailSummary)
+                    .ToList();
+            }
         }
 
-        var fetchRequest = new FetchRequest(MessageSummaryItems.Envelope | MessageSummaryItems.UniqueId | MessageSummaryItems.Flags | MessageSummaryItems.InternalDate);
-        var summaries = await inbox.FetchAsync(start, end, fetchRequest, timeoutCts.Token);
-        var result = summaries
-            .OrderByDescending(s => s.InternalDate)
-            .Select(s => new EmailSummary
-            {
-                Id = s.UniqueId.Id.ToString(),
-                Subject = s.Envelope?.Subject ?? string.Empty,
-                From = s.Envelope?.From?.FirstOrDefault()?.ToString() ?? string.Empty,
-                Date = s.InternalDate ?? DateTimeOffset.MinValue,
-                IsSeen = s.Flags.HasValue && s.Flags.Value.HasFlag(MessageFlags.Seen)
-            })
-            .ToList();
+        await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
 
-        await client.DisconnectAsync(true, timeoutCts.Token);
-        return result;
+        int? nextOffset = null;
+        if (clampedOffset + items.Count < totalCount)
+            nextOffset = clampedOffset + items.Count;
+
+        return new EmailListResult
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Offset = clampedOffset,
+            Limit = clampedLimit,
+            NextOffset = nextOffset
+        };
+    }
+
+    private static EmailSummary ToEmailSummary(IMessageSummary s) =>
+        new()
+        {
+            Id = s.UniqueId.Id.ToString(),
+            Subject = s.Envelope?.Subject ?? string.Empty,
+            From = s.Envelope?.From?.FirstOrDefault()?.ToString() ?? string.Empty,
+            Date = s.InternalDate ?? DateTimeOffset.MinValue,
+            IsSeen = s.Flags.HasValue && s.Flags.Value.HasFlag(MessageFlags.Seen)
+        };
+
+    /// <summary>Builds an IMAP SEARCH query from list filters. Exposed for unit tests.</summary>
+    internal static SearchQuery BuildListSearchQuery(EmailListFilter filter)
+    {
+        SearchQuery? query = null;
+
+        void And(SearchQuery next) =>
+            query = query is null ? next : query.And(next);
+
+        if (filter.Unread == true)
+            And(SearchQuery.NotSeen);
+        else if (filter.Unread == false)
+            And(SearchQuery.Seen);
+
+        if (filter.Since is { } since)
+            And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date.AddDays(-1)));
+
+        if (filter.Before is { } before)
+            And(SearchQuery.DeliveredBefore(before.UtcDateTime.Date.AddDays(1)));
+
+        if (!string.IsNullOrWhiteSpace(filter.FromContains))
+            And(SearchQuery.FromContains(filter.FromContains.Trim()));
+
+        if (!string.IsNullOrWhiteSpace(filter.SubjectContains))
+            And(SearchQuery.SubjectContains(filter.SubjectContains.Trim()));
+
+        return query ?? SearchQuery.All;
     }
 
     public async Task<EmailContent> GetEmailAsync(
@@ -133,7 +218,17 @@ public sealed class MailKitEmailService(
         var inbox = await GetExistingMailboxAsync(client, folderName, timeoutCts.Token).ConfigureAwait(false);
         await inbox.OpenAsync(FolderAccess.ReadOnly, timeoutCts.Token);
 
-        var message = await inbox.GetMessageAsync(uid, timeoutCts.Token);
+        MimeMessage message;
+        try
+        {
+            message = await inbox.GetMessageAsync(uid, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (MessageNotFoundException)
+        {
+            await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
+            throw new EmailNotFoundException(id, folderName);
+        }
+
         var content = new EmailContent
         {
             Id = id,
@@ -142,6 +237,8 @@ public sealed class MailKitEmailService(
             To = FormatAddressList(message.To),
             Cc = FormatAddressList(message.Cc),
             MessageId = string.IsNullOrWhiteSpace(message.MessageId) ? null : message.MessageId.Trim(),
+            InReplyTo = FormatInReplyTo(message),
+            References = FormatReferences(message),
             BodyText = message.TextBody ?? string.Empty,
             BodyHtml = message.HtmlBody,
             Date = message.Date,
@@ -355,15 +452,42 @@ public sealed class MailKitEmailService(
         CancellationToken cancellationToken = default,
         string? accountId = null)
     {
+        var bulk = await MoveEmailsAsync(
+                [id],
+                destinationMailbox,
+                sourceMailbox,
+                userId,
+                cancellationToken,
+                accountId)
+            .ConfigureAwait(false);
+
+        return new EmailMoveResult
+        {
+            Id = id,
+            FromMailbox = bulk.FromMailbox,
+            ToMailbox = bulk.ToMailbox,
+            Method = bulk.Method
+        };
+    }
+
+    public async Task<EmailBulkMoveResult> MoveEmailsAsync(
+        IReadOnlyList<string> ids,
+        string destinationMailbox,
+        string? sourceMailbox = null,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null)
+    {
         if (string.IsNullOrWhiteSpace(destinationMailbox))
             throw new ArgumentException("Destination mailbox is required.", nameof(destinationMailbox));
+
+        var uids = ParseUids(ids);
 
         var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
         EnsureImapConfigured(imap);
 
         var sourceName = ResolveMailbox(imap, sourceMailbox);
         var destName = destinationMailbox.Trim().TrimEnd('/', '.');
-        var uid = ParseUid(id);
 
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
@@ -372,20 +496,21 @@ public sealed class MailKitEmailService(
 
         var destination = await GetOrCreateMailboxAsync(client, destName, timeoutCts.Token).ConfigureAwait(false);
         var method = client.Capabilities.HasFlag(ImapCapabilities.Move) ? "MOVE" : "COPY+DELETE";
-        await source.MoveToAsync(uid, destination, timeoutCts.Token).ConfigureAwait(false);
+        await source.MoveToAsync(uids, destination, timeoutCts.Token).ConfigureAwait(false);
 
         logger.LogInformation(
-            "Moved message Uid={Uid} from {FromMailbox} to {ToMailbox} via {Method}",
-            uid, sourceName, destination.FullName, method);
+            "Moved {Count} message(s) from {FromMailbox} to {ToMailbox} via {Method}",
+            uids.Count, sourceName, destination.FullName, method);
 
         await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
 
-        return new EmailMoveResult
+        return new EmailBulkMoveResult
         {
-            Id = id,
+            Ids = uids.Select(u => u.Id.ToString()).ToList(),
             FromMailbox = sourceName,
             ToMailbox = destination.FullName,
-            Method = method
+            Method = method,
+            MovedCount = uids.Count
         };
     }
 
@@ -397,52 +522,108 @@ public sealed class MailKitEmailService(
         DateTimeOffset? messageDate = null,
         string? accountId = null)
     {
+        var bulk = await ArchiveEmailsAsync(
+                [id],
+                sourceMailbox,
+                userId,
+                cancellationToken,
+                messageDate,
+                accountId)
+            .ConfigureAwait(false);
+
+        var first = bulk[0];
+        return new EmailMoveResult
+        {
+            Id = id,
+            FromMailbox = first.FromMailbox,
+            ToMailbox = first.ToMailbox,
+            Method = first.Method
+        };
+    }
+
+    public async Task<IReadOnlyList<EmailBulkMoveResult>> ArchiveEmailsAsync(
+        IReadOnlyList<string> ids,
+        string? sourceMailbox = null,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        DateTimeOffset? messageDate = null,
+        string? accountId = null)
+    {
+        var uids = ParseUids(ids);
+
         var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
         EnsureImapConfigured(imap);
 
         var sourceName = ResolveMailbox(imap, sourceMailbox);
-        var uid = ParseUid(id);
 
         using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
         using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
         var source = await GetExistingMailboxAsync(client, sourceName, timeoutCts.Token).ConfigureAwait(false);
         await source.OpenAsync(FolderAccess.ReadWrite, timeoutCts.Token);
 
-        DateTimeOffset? effectiveDate = messageDate;
-        if (effectiveDate is null || effectiveDate == DateTimeOffset.MinValue)
+        var method = client.Capabilities.HasFlag(ImapCapabilities.Move) ? "MOVE" : "COPY+DELETE";
+        var groups = new Dictionary<string, List<UniqueId>>(StringComparer.Ordinal);
+
+        if (messageDate is { } forced && forced != DateTimeOffset.MinValue)
+        {
+            var destPattern = ArchiveFolderPath.Expand(imap.ArchiveFolder, forced);
+            groups[destPattern] = uids.ToList();
+        }
+        else
         {
             var summaries = await source.FetchAsync(
-                new[] { uid },
-                MessageSummaryItems.Envelope | MessageSummaryItems.InternalDate,
-                timeoutCts.Token).ConfigureAwait(false);
-            var summary = summaries.FirstOrDefault()
-                ?? throw new InvalidOperationException($"Message with UID {id} was not found in mailbox '{sourceName}'.");
+                    uids,
+                    MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.InternalDate,
+                    timeoutCts.Token)
+                .ConfigureAwait(false);
 
-            effectiveDate = summary.Envelope?.Date;
-            if (effectiveDate is null || effectiveDate == DateTimeOffset.MinValue)
-                effectiveDate = summary.InternalDate;
-            if (effectiveDate is null || effectiveDate == DateTimeOffset.MinValue)
-                effectiveDate = null; // ArchiveFolderPath falls back to UTC now
+            var byUid = summaries.ToDictionary(s => s.UniqueId);
+            foreach (var uid in uids)
+            {
+                DateTimeOffset? effectiveDate = null;
+                if (byUid.TryGetValue(uid, out var summary))
+                {
+                    effectiveDate = summary.Envelope?.Date;
+                    if (effectiveDate is null || effectiveDate == DateTimeOffset.MinValue)
+                        effectiveDate = summary.InternalDate;
+                    if (effectiveDate is null || effectiveDate == DateTimeOffset.MinValue)
+                        effectiveDate = null;
+                }
+
+                var destPattern = ArchiveFolderPath.Expand(imap.ArchiveFolder, effectiveDate);
+                if (!groups.TryGetValue(destPattern, out var list))
+                {
+                    list = [];
+                    groups[destPattern] = list;
+                }
+
+                list.Add(uid);
+            }
         }
 
-        var destPattern = ArchiveFolderPath.Expand(imap.ArchiveFolder, effectiveDate);
-        var destination = await GetOrCreateMailboxAsync(client, destPattern, timeoutCts.Token).ConfigureAwait(false);
-        var method = client.Capabilities.HasFlag(ImapCapabilities.Move) ? "MOVE" : "COPY+DELETE";
-        await source.MoveToAsync(uid, destination, timeoutCts.Token).ConfigureAwait(false);
+        var results = new List<EmailBulkMoveResult>(groups.Count);
+        foreach (var (destPattern, groupUids) in groups)
+        {
+            var destination = await GetOrCreateMailboxAsync(client, destPattern, timeoutCts.Token)
+                .ConfigureAwait(false);
+            await source.MoveToAsync(groupUids, destination, timeoutCts.Token).ConfigureAwait(false);
 
-        logger.LogInformation(
-            "Archived message Uid={Uid} from {FromMailbox} to {ToMailbox} via {Method}",
-            uid, sourceName, destination.FullName, method);
+            logger.LogInformation(
+                "Archived {Count} message(s) from {FromMailbox} to {ToMailbox} via {Method}",
+                groupUids.Count, sourceName, destination.FullName, method);
+
+            results.Add(new EmailBulkMoveResult
+            {
+                Ids = groupUids.Select(u => u.Id.ToString()).ToList(),
+                FromMailbox = sourceName,
+                ToMailbox = destination.FullName,
+                Method = method,
+                MovedCount = groupUids.Count
+            });
+        }
 
         await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
-
-        return new EmailMoveResult
-        {
-            Id = id,
-            FromMailbox = sourceName,
-            ToMailbox = destination.FullName,
-            Method = method
-        };
+        return results;
     }
 
     public async Task<EmailMoveResult> TrashEmailAsync(
@@ -833,6 +1014,57 @@ public sealed class MailKitEmailService(
         if (string.IsNullOrWhiteSpace(id) || !uint.TryParse(id.Trim(), out var value) || value == 0)
             throw new ArgumentException($"Invalid IMAP UID '{id}'. Expected a positive integer.", nameof(id));
         return new UniqueId(value);
+    }
+
+    /// <summary>Parses and de-duplicates IMAP UIDs while preserving first-seen order.</summary>
+    public static IList<UniqueId> ParseUids(IReadOnlyList<string> ids)
+    {
+        if (ids is null || ids.Count == 0)
+            throw new ArgumentException("At least one IMAP UID is required.", nameof(ids));
+
+        var result = new List<UniqueId>(ids.Count);
+        var seen = new HashSet<uint>();
+        foreach (var id in ids)
+        {
+            var uid = ParseUid(id);
+            if (seen.Add(uid.Id))
+                result.Add(uid);
+        }
+
+        if (result.Count == 0)
+            throw new ArgumentException("At least one IMAP UID is required.", nameof(ids));
+
+        return result;
+    }
+
+    internal static string? FormatInReplyTo(MimeMessage message)
+    {
+        if (!string.IsNullOrWhiteSpace(message.InReplyTo))
+            return NormalizeMessageId(message.InReplyTo);
+
+        var raw = message.Headers[HeaderId.InReplyTo];
+        return string.IsNullOrWhiteSpace(raw) ? null : NormalizeMessageId(raw);
+    }
+
+    internal static IReadOnlyList<string> FormatReferences(MimeMessage message)
+    {
+        if (message.References is { Count: > 0 })
+        {
+            return message.References
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(NormalizeMessageId)
+                .ToList();
+        }
+
+        var raw = message.Headers[HeaderId.References];
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        // Space-separated Message-Ids, optionally angle-bracketed.
+        return raw.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeMessageId)
+            .Where(r => r.Length > 0)
+            .ToList();
     }
 
     public static int NormalizeTimeoutMs(int timeoutMs) =>

@@ -85,8 +85,26 @@ public sealed class CalendarAddRequest
     public string? Location { get; set; }
     public string? Description { get; set; }
 
-    /// <summary>Optional IANA timezone (e.g. Europe/Berlin). When set, the event is stored in this timezone.</summary>
+    /// <summary>
+    /// Optional IANA timezone (e.g. Europe/Berlin). When omitted, defaults to
+    /// <see cref="CalDavCalendarService.DefaultTimeZoneId"/> — never floating local time that drops offsets.
+    /// </summary>
     public string? TimeZoneId { get; set; }
+
+    /// <summary>
+    /// Full RRULE body without the <c>RRULE:</c> prefix (e.g. <c>FREQ=WEEKLY;COUNT=8</c>).
+    /// When set, takes precedence over <see cref="RecurrenceFrequency"/>.
+    /// </summary>
+    public string? RecurrenceRule { get; set; }
+
+    /// <summary>Simple recurrence: <c>daily</c> or <c>weekly</c> (ignored when <see cref="RecurrenceRule"/> is set).</summary>
+    public string? RecurrenceFrequency { get; set; }
+
+    /// <summary>Optional COUNT for simple recurrence (mutually exclusive with <see cref="RecurrenceUntil"/>).</summary>
+    public int? RecurrenceCount { get; set; }
+
+    /// <summary>Optional UNTIL (UTC) for simple recurrence.</summary>
+    public DateTime? RecurrenceUntil { get; set; }
 
     /// <summary>Optional override of the calendar collection URL.</summary>
     public string? CalendarUrl { get; set; }

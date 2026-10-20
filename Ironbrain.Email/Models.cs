@@ -9,6 +9,48 @@ public sealed class EmailSummary
     public bool IsSeen { get; set; }
 }
 
+/// <summary>
+/// Server-side IMAP list filters for <see cref="IEmailService.ListInboxAsync"/>.
+/// Folder/mailbox is passed separately as the mailbox argument.
+/// </summary>
+public sealed class EmailListFilter
+{
+    /// <summary>When true, only unseen; when false, only seen; when null, no flag filter.</summary>
+    public bool? Unread { get; init; }
+
+    /// <summary>Inclusive lower bound on INTERNALDATE / delivery date (UTC-normalized for SEARCH).</summary>
+    public DateTimeOffset? Since { get; init; }
+
+    /// <summary>Exclusive upper bound on INTERNALDATE / delivery date.</summary>
+    public DateTimeOffset? Before { get; init; }
+
+    /// <summary>Case-insensitive substring match on the From header.</summary>
+    public string? FromContains { get; init; }
+
+    /// <summary>Case-insensitive substring match on the Subject header.</summary>
+    public string? SubjectContains { get; init; }
+
+    public bool HasAny =>
+        Unread.HasValue
+        || Since.HasValue
+        || Before.HasValue
+        || !string.IsNullOrWhiteSpace(FromContains)
+        || !string.IsNullOrWhiteSpace(SubjectContains);
+}
+
+/// <summary>Paged IMAP list result with stable offset pagination.</summary>
+public sealed class EmailListResult
+{
+    public required IReadOnlyList<EmailSummary> Items { get; init; }
+    /// <summary>Total matching messages in the folder (after filters).</summary>
+    public required int TotalCount { get; init; }
+    /// <summary>Requested offset from newest (0 = most recent).</summary>
+    public required int Offset { get; init; }
+    public required int Limit { get; init; }
+    /// <summary>Next offset to request, or null when this page exhausted the match set.</summary>
+    public int? NextOffset { get; init; }
+}
+
 /// <summary>Attachment metadata exposed by <see cref="EmailContent"/> (no binary payload).</summary>
 public sealed class EmailAttachmentInfo
 {
@@ -29,11 +71,26 @@ public sealed class EmailContent
     public string Cc { get; set; } = string.Empty;
     /// <summary>RFC Message-ID header value when present (including angle brackets when the server stored them).</summary>
     public string? MessageId { get; set; }
+    /// <summary>RFC In-Reply-To header value when present (normalized Message-Id without angle brackets when MimeKit stores it that way).</summary>
+    public string? InReplyTo { get; set; }
+    /// <summary>RFC References thread header Message-Ids (order preserved; normalized without angle brackets).</summary>
+    public IReadOnlyList<string> References { get; set; } = [];
     public required string BodyText { get; set; }
     public string? BodyHtml { get; set; }
     public DateTimeOffset Date { get; set; }
     /// <summary>Original attachments (file name / type / size). Binary content is not included.</summary>
     public IReadOnlyList<EmailAttachmentInfo> Attachments { get; set; } = [];
+}
+
+/// <summary>Result of a bulk IMAP UID move or archive.</summary>
+public sealed class EmailBulkMoveResult
+{
+    public required string FromMailbox { get; set; }
+    public required string ToMailbox { get; set; }
+    /// <summary><c>MOVE</c> when the server supports IMAP MOVE; otherwise <c>COPY+DELETE</c>.</summary>
+    public required string Method { get; set; }
+    public required IReadOnlyList<string> Ids { get; set; }
+    public required int MovedCount { get; set; }
 }
 
 public sealed class EmailSendRequest

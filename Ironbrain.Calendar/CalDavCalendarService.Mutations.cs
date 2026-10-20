@@ -334,22 +334,25 @@ public sealed partial class CalDavCalendarService
         if (request.Description is not null)
             evt.Description = request.Description;
 
-        var tz = request.TimeZoneId?.Trim();
+        // Prefer explicit request TZ; else keep existing event TZ; else default Europe/Berlin — never floating.
+        var tz = !string.IsNullOrWhiteSpace(request.TimeZoneId)
+            ? request.TimeZoneId.Trim()
+            : evt.Start?.TzId;
+        if (string.IsNullOrWhiteSpace(tz))
+            tz = DefaultTimeZoneId;
+
         var previousStart = evt.Start;
         var previousEnd = evt.End;
 
         if (request.Start is { } start)
         {
-            evt.Start = string.IsNullOrEmpty(tz)
-                ? ToCalDateTime(start)
-                : new CalDateTime(AsUnspecifiedOrUtc(start), tz);
+            evt.Start = new CalDateTime(AsUnspecifiedOrUtc(start), tz);
+            EnsureVTimeZone(evt, tz);
         }
 
         if (request.End is { } end)
         {
-            evt.End = string.IsNullOrEmpty(tz)
-                ? ToCalDateTime(end)
-                : new CalDateTime(AsUnspecifiedOrUtc(end), tz);
+            evt.End = new CalDateTime(AsUnspecifiedOrUtc(end), tz);
         }
         else if (request.Start is not null && previousStart is not null && previousEnd is not null)
         {
@@ -357,11 +360,19 @@ public sealed partial class CalDavCalendarService
             if (duration > TimeSpan.Zero && evt.Start is not null)
             {
                 var tzId = evt.Start.TzId ?? tz;
-                evt.End = string.IsNullOrEmpty(tzId)
-                    ? ToCalDateTime(evt.Start.AsUtc.Add(duration))
-                    : new CalDateTime(evt.Start.AsUtc.Add(duration), tzId);
+                evt.End = new CalDateTime(evt.Start.AsUtc.Add(duration), tzId!);
             }
         }
+    }
+
+    private static void EnsureVTimeZone(CalendarEvent evt, string tzId)
+    {
+        if (evt.Calendar is null || string.IsNullOrWhiteSpace(tzId))
+            return;
+        var has = evt.Calendar.TimeZones?.Any(z =>
+            string.Equals(z.TzId, tzId, StringComparison.OrdinalIgnoreCase)) == true;
+        if (!has)
+            evt.Calendar.AddTimeZone(new VTimeZone(tzId));
     }
 
     private static CalDateTime ToOccurrenceCalDateTime(DateTime occurrenceStartUtc, CalendarEvent master)

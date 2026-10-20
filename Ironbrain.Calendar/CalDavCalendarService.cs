@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Xml.Linq;
+using Ical.Net;
 using Ical.Net.CalendarComponents;
 using Ical.Net.DataTypes;
 using Ical.Net.Serialization;
@@ -177,7 +178,11 @@ public sealed partial class CalDavCalendarService(
             request.End,
             request.Location ?? string.Empty,
             request.Description ?? string.Empty,
-            request.TimeZoneId?.Trim());
+            request.TimeZoneId?.Trim(),
+            request.RecurrenceRule,
+            request.RecurrenceFrequency,
+            request.RecurrenceCount,
+            request.RecurrenceUntil);
         var resourceName = Guid.NewGuid().ToString("N") + ".ics";
         var putUrl = CalendarCollectionHelper.EnsureCollectionUrl(url) + resourceName;
 
@@ -698,23 +703,74 @@ public sealed partial class CalDavCalendarService(
 
     internal readonly record struct CalDavResource(string? Href, string? ETag, string CalendarData);
 
-    private static string BuildIcsForNewEvent(string summary, DateTime start, DateTime end, string location, string description, string? timeZoneId)
+    /// <summary>Default IANA zone when <c>timeZoneId</c> is omitted (org/account default).</summary>
+    public const string DefaultTimeZoneId = "Europe/Berlin";
+
+    /// <summary>
+    /// Resolves wall-clock times + effective TZ for add/update. Never drops a DateTimeOffset into floating time.
+    /// When <paramref name="timeZoneId"/> is null/empty, uses <see cref="DefaultTimeZoneId"/>.
+    /// </summary>
+    public static (DateTime StartLocal, DateTime EndLocal, string TimeZoneId) ResolveEventDateTimes(
+        DateTimeOffset start,
+        DateTimeOffset end,
+        string? timeZoneId)
+    {
+        var tzId = string.IsNullOrWhiteSpace(timeZoneId) ? DefaultTimeZoneId : timeZoneId.Trim();
+        var tz = ResolveTimeZoneInfo(tzId);
+        var startLocal = TimeZoneInfo.ConvertTime(start, tz).DateTime;
+        var endLocal = TimeZoneInfo.ConvertTime(end, tz).DateTime;
+        return (
+            DateTime.SpecifyKind(startLocal, DateTimeKind.Unspecified),
+            DateTime.SpecifyKind(endLocal, DateTimeKind.Unspecified),
+            tzId);
+    }
+
+    internal static TimeZoneInfo ResolveTimeZoneInfo(string timeZoneId)
+    {
+        if (TimeZoneInfo.TryFindSystemTimeZoneById(timeZoneId, out var tz))
+            return tz;
+        // Windows may expose "W. Europe Standard Time" while clients send IANA ids.
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch (TimeZoneNotFoundException ex)
+        {
+            throw new ArgumentException(
+                $"Unknown time zone '{timeZoneId}'. Use an IANA id such as {DefaultTimeZoneId}.",
+                nameof(timeZoneId),
+                ex);
+        }
+        catch (InvalidTimeZoneException ex)
+        {
+            throw new ArgumentException(
+                $"Invalid time zone '{timeZoneId}'.",
+                nameof(timeZoneId),
+                ex);
+        }
+    }
+
+    internal static string EffectiveTimeZoneId(string? timeZoneId) =>
+        string.IsNullOrWhiteSpace(timeZoneId) ? DefaultTimeZoneId : timeZoneId.Trim();
+
+    private static string BuildIcsForNewEvent(
+        string summary,
+        DateTime start,
+        DateTime end,
+        string location,
+        string description,
+        string? timeZoneId,
+        string? recurrenceRule = null,
+        string? recurrenceFrequency = null,
+        int? recurrenceCount = null,
+        DateTime? recurrenceUntil = null)
     {
         var uid = "ironbrain-" + Guid.NewGuid().ToString("N") + "@ironbrain";
-        CalDateTime startCal;
-        CalDateTime endCal;
+        var effectiveTz = EffectiveTimeZoneId(timeZoneId);
         var calendar = new IcalCalendar();
-        if (!string.IsNullOrEmpty(timeZoneId))
-        {
-            calendar.AddTimeZone(new VTimeZone(timeZoneId));
-            startCal = new CalDateTime(AsUnspecifiedOrUtc(start), timeZoneId);
-            endCal = new CalDateTime(AsUnspecifiedOrUtc(end), timeZoneId);
-        }
-        else
-        {
-            startCal = ToCalDateTime(start);
-            endCal = ToCalDateTime(end);
-        }
+        calendar.AddTimeZone(new VTimeZone(effectiveTz));
+        var startCal = new CalDateTime(AsUnspecifiedOrUtc(start), effectiveTz);
+        var endCal = new CalDateTime(AsUnspecifiedOrUtc(end), effectiveTz);
 
         var evt = new CalendarEvent
         {
@@ -725,9 +781,74 @@ public sealed partial class CalDavCalendarService(
             Location = location,
             Description = description
         };
+
+        var pattern = BuildRecurrencePattern(recurrenceRule, recurrenceFrequency, recurrenceCount, recurrenceUntil);
+        if (pattern is not null)
+            evt.RecurrenceRules.Add(pattern);
+
         calendar.Events.Add(evt);
         var serializer = new CalendarSerializer();
         var ics = serializer.SerializeToString(calendar);
         return ics ?? throw new InvalidOperationException("Failed to serialize calendar event to ICS.");
+    }
+
+    /// <summary>Builds an iCal recurrence pattern from RRULE or simple frequency helpers.</summary>
+    internal static RecurrencePattern? BuildRecurrencePattern(
+        string? recurrenceRule,
+        string? recurrenceFrequency,
+        int? recurrenceCount,
+        DateTime? recurrenceUntil)
+    {
+        if (!string.IsNullOrWhiteSpace(recurrenceRule))
+        {
+            var raw = recurrenceRule.Trim();
+            if (raw.StartsWith("RRULE:", StringComparison.OrdinalIgnoreCase))
+                raw = raw["RRULE:".Length..].Trim();
+            try
+            {
+                return new RecurrencePattern(raw);
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException($"Invalid RRULE '{recurrenceRule}'.", nameof(recurrenceRule), ex);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(recurrenceFrequency))
+            return null;
+
+        var freq = recurrenceFrequency.Trim().ToLowerInvariant() switch
+        {
+            "daily" or "day" => FrequencyType.Daily,
+            "weekly" or "week" => FrequencyType.Weekly,
+            _ => throw new ArgumentException(
+                "RecurrenceFrequency must be 'daily' or 'weekly' (or pass RecurrenceRule).",
+                nameof(recurrenceFrequency))
+        };
+
+        if (recurrenceCount is { } count && recurrenceUntil is not null)
+            throw new ArgumentException("Specify RecurrenceCount or RecurrenceUntil, not both.");
+
+        if (recurrenceCount is { } c)
+        {
+            if (c < 1)
+                throw new ArgumentException("RecurrenceCount must be >= 1.", nameof(recurrenceCount));
+            return new RecurrencePattern(freq, interval: 1) { Count = c };
+        }
+
+        if (recurrenceUntil is { } until)
+        {
+            var untilUtc = until.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(until, DateTimeKind.Utc)
+                : until.ToUniversalTime();
+            return new RecurrencePattern(freq, interval: 1)
+            {
+                Until = new CalDateTime(untilUtc, "UTC")
+            };
+        }
+
+        // Frequency alone with neither COUNT nor UNTIL is unbounded — require an end condition for safety.
+        throw new ArgumentException(
+            "RecurrenceFrequency requires RecurrenceCount or RecurrenceUntil (or pass a full RecurrenceRule).");
     }
 }

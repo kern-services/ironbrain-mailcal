@@ -5,13 +5,15 @@ public interface IEmailService
     /// <param name="userId">When set, uses this user's mail config from the host; otherwise uses appsettings / file config.</param>
     /// <param name="mailbox">Optional IMAP folder override (e.g. CLI <c>--mailbox</c>). When null, uses the configured default mailbox.</param>
     /// <param name="accountId">Optional host account id. When null, the host uses the first mail config.</param>
-    Task<IReadOnlyList<EmailSummary>> ListInboxAsync(
+    /// <param name="filter">Optional server-side IMAP SEARCH filters (unread, since/before, from/subject contains).</param>
+    Task<EmailListResult> ListInboxAsync(
         int limit = 20,
         int offset = 0,
         string? userId = null,
         CancellationToken cancellationToken = default,
         string? mailbox = null,
-        string? accountId = null);
+        string? accountId = null,
+        EmailListFilter? filter = null);
 
     /// <param name="mailbox">Optional IMAP folder override. When null, uses the configured default mailbox.</param>
     /// <param name="accountId">Optional host account id; null → first mail config.</param>
@@ -62,6 +64,18 @@ public interface IEmailService
         string? accountId = null);
 
     /// <summary>
+    /// Moves multiple messages by IMAP UID in one IMAP session (single MOVE when possible).
+    /// Same destination / source rules as <see cref="MoveEmailAsync"/>.
+    /// </summary>
+    Task<EmailBulkMoveResult> MoveEmailsAsync(
+        IReadOnlyList<string> ids,
+        string destinationMailbox,
+        string? sourceMailbox = null,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null);
+
+    /// <summary>
     /// Moves a message by IMAP UID into <see cref="ImapOptions.ArchiveFolder"/>
     /// (default <c>Archive/{CurrentYear}</c> when unset/empty).
     /// <c>{CurrentYear}</c> expands from UTC now; other date tokens from
@@ -69,6 +83,18 @@ public interface IEmailService
     /// </summary>
     Task<EmailMoveResult> ArchiveEmailAsync(
         string id,
+        string? sourceMailbox = null,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        DateTimeOffset? messageDate = null,
+        string? accountId = null);
+
+    /// <summary>
+    /// Archives multiple messages by IMAP UID in one IMAP session.
+    /// Groups by expanded archive folder (per-message Date when <paramref name="messageDate"/> is null).
+    /// </summary>
+    Task<IReadOnlyList<EmailBulkMoveResult>> ArchiveEmailsAsync(
+        IReadOnlyList<string> ids,
         string? sourceMailbox = null,
         string? userId = null,
         CancellationToken cancellationToken = default,
