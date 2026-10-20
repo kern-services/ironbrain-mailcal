@@ -41,27 +41,52 @@ public sealed class MailCalTools(
     }
 
     [McpServerTool(Name = "list_emails")]
-    [Description("Lists recent emails from the selected account's IMAP mailbox.")]
+    [Description(
+        "Lists emails from the selected account's IMAP mailbox with optional server-side filters. " +
+        "Returns items, totalCount, offset, limit, nextOffset.")]
     public async Task<string> ListEmailsAsync(
         [Description("Optional account name; defaultAccount / IRONBRAIN_MAILCAL_ACCOUNT / sole account if omitted")] string? account = null,
-        [Description("Max number of emails")] int limit = 20,
+        [Description("Max number of emails (1-100)")] int limit = 20,
         [Description("Offset from the most recent")] int offset = 0,
+        [Description("Optional IMAP mailbox/folder override")] string? mailbox = null,
+        [Description("When true, only unread; when false, only read")] bool? unread = null,
+        [Description("Inclusive lower bound (ISO-8601) on delivery date")] DateTimeOffset? since = null,
+        [Description("Exclusive upper bound (ISO-8601) on delivery date")] DateTimeOffset? before = null,
+        [Description("Substring match on From")] string? fromContains = null,
+        [Description("Substring match on Subject")] string? subjectContains = null,
         CancellationToken cancellationToken = default)
     {
-        var (email, _, _) = Create(account);
-        var items = await email.ListInboxAsync(limit, offset, userId: null, cancellationToken);
-        return JsonSerializer.Serialize(items, JsonOptions);
+        var (email, _, _) = Create(account, mailbox);
+        EmailListFilter? filter = null;
+        if (unread.HasValue || since.HasValue || before.HasValue
+            || !string.IsNullOrWhiteSpace(fromContains) || !string.IsNullOrWhiteSpace(subjectContains))
+        {
+            filter = new EmailListFilter
+            {
+                Unread = unread,
+                Since = since,
+                Before = before,
+                FromContains = fromContains,
+                SubjectContains = subjectContains
+            };
+        }
+
+        var result = await email.ListInboxAsync(limit, offset, userId: null, cancellationToken, mailbox, filter: filter);
+        return JsonSerializer.Serialize(result, JsonOptions);
     }
 
     [McpServerTool(Name = "get_email")]
-    [Description("Gets a specific email by IMAP unique id from the selected account.")]
+    [Description(
+        "Gets a specific email by IMAP unique id from the selected account. " +
+        "Includes In-Reply-To and References for threading verification.")]
     public async Task<string> GetEmailAsync(
         [Description("IMAP unique id")] string id,
         [Description("Optional account name")] string? account = null,
+        [Description("Optional IMAP mailbox/folder override")] string? mailbox = null,
         CancellationToken cancellationToken = default)
     {
-        var (email, _, _) = Create(account);
-        var content = await email.GetEmailAsync(id, userId: null, cancellationToken);
+        var (email, _, _) = Create(account, mailbox);
+        var content = await email.GetEmailAsync(id, userId: null, cancellationToken, mailbox);
         return JsonSerializer.Serialize(content, JsonOptions);
     }
 
@@ -88,44 +113,95 @@ public sealed class MailCalTools(
     }
 
     [McpServerTool(Name = "move_email")]
-    [Description("Moves a message by IMAP UID to a destination mailbox. Prefers UID MOVE; falls back to COPY+\\Deleted+EXPUNGE. Creates the destination folder when the server allows.")]
+    [Description(
+        "Moves one or more messages by IMAP UID to a destination mailbox. " +
+        "Pass uid for a single message, or uids (comma-separated) for bulk. " +
+        "Prefers UID MOVE; falls back to COPY+\\Deleted+EXPUNGE.")]
     public async Task<string> MoveEmailAsync(
-        [Description("IMAP unique id (UID)")] string uid,
-        [Description("Destination IMAP mailbox (e.g. Archive/2026)")] string toMailbox,
+        [Description("IMAP unique id (UID); omit when uids is set")] string? uid = null,
+        [Description("Destination IMAP mailbox (e.g. Archive/2026)")] string toMailbox = "",
         [Description("Optional source mailbox override (default: account Imap.Mailbox / INBOX)")] string? mailbox = null,
         [Description("Optional account name")] string? account = null,
+        [Description("Comma-separated IMAP UIDs for bulk move (one IMAP MOVE)")] string? uids = null,
         CancellationToken cancellationToken = default)
     {
         var (email, _, resolved) = Create(account, mailbox);
-        var result = await email.MoveEmailAsync(uid, toMailbox, sourceMailbox: null, userId: null, cancellationToken);
+        var idList = ParseUidList(uid, uids);
+        if (idList.Count == 1)
+        {
+            var result = await email.MoveEmailAsync(idList[0], toMailbox, sourceMailbox: null, userId: null, cancellationToken);
+            return JsonSerializer.Serialize(new
+            {
+                result.Id,
+                result.FromMailbox,
+                result.ToMailbox,
+                result.Method,
+                account = resolved.Name
+            }, JsonOptions);
+        }
+
+        var bulk = await email.MoveEmailsAsync(idList, toMailbox, sourceMailbox: null, userId: null, cancellationToken);
         return JsonSerializer.Serialize(new
         {
-            result.Id,
-            result.FromMailbox,
-            result.ToMailbox,
-            result.Method,
+            bulk.Ids,
+            bulk.FromMailbox,
+            bulk.ToMailbox,
+            bulk.Method,
+            bulk.MovedCount,
             account = resolved.Name
         }, JsonOptions);
     }
 
     [McpServerTool(Name = "archive_email")]
-    [Description("Archives a message by IMAP UID into Email:Imap:ArchiveFolder (default Archive/{CurrentYear} when unset). {CurrentYear} expands from UTC now; {YYYY}/{MM}/{YY}/{DD} from message Date, else UTC now.")]
+    [Description(
+        "Archives one or more messages by IMAP UID into Email:Imap:ArchiveFolder. " +
+        "Pass uid for a single message, or uids (comma-separated) for bulk.")]
     public async Task<string> ArchiveEmailAsync(
-        [Description("IMAP unique id (UID)")] string uid,
+        [Description("IMAP unique id (UID); omit when uids is set")] string? uid = null,
         [Description("Optional source mailbox override (default: account Imap.Mailbox / INBOX)")] string? mailbox = null,
         [Description("Optional account name")] string? account = null,
+        [Description("Comma-separated IMAP UIDs for bulk archive")] string? uids = null,
         CancellationToken cancellationToken = default)
     {
         var (email, _, resolved) = Create(account, mailbox);
-        var result = await email.ArchiveEmailAsync(uid, sourceMailbox: null, userId: null, cancellationToken);
+        var idList = ParseUidList(uid, uids);
+        if (idList.Count == 1)
+        {
+            var result = await email.ArchiveEmailAsync(idList[0], sourceMailbox: null, userId: null, cancellationToken);
+            return JsonSerializer.Serialize(new
+            {
+                result.Id,
+                result.FromMailbox,
+                result.ToMailbox,
+                result.Method,
+                account = resolved.Name
+            }, JsonOptions);
+        }
+
+        var bulk = await email.ArchiveEmailsAsync(idList, sourceMailbox: null, userId: null, cancellationToken);
         return JsonSerializer.Serialize(new
         {
-            result.Id,
-            result.FromMailbox,
-            result.ToMailbox,
-            result.Method,
+            groups = bulk,
             account = resolved.Name
         }, JsonOptions);
+    }
+
+    private static IReadOnlyList<string> ParseUidList(string? uid, string? uids)
+    {
+        var list = new List<string>();
+        if (!string.IsNullOrWhiteSpace(uids))
+        {
+            foreach (var part in uids.Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                list.Add(part);
+        }
+
+        if (!string.IsNullOrWhiteSpace(uid))
+            list.Insert(0, uid.Trim());
+
+        if (list.Count == 0)
+            throw new ArgumentException("Provide uid and/or uids.");
+
+        return list;
     }
 
     [McpServerTool(Name = "get_appointments_for_day")]

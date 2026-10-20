@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-10-20
+
+### Added
+
+- `list_emails` / `mail list`: server-side IMAP filters (`unread`, `since`/`before`, `fromContains`, `subjectContains`, folder via mailbox) returning `EmailListResult` with `totalCount`, `offset`, `limit`, `nextOffset`.
+- `get_email`: exposes `InReplyTo` and `References` for threading verification; missing UID → `EmailNotFoundException` (hosts map to HTTP 404).
+- Bulk IMAP move/archive: `MoveEmailsAsync` / `ArchiveEmailsAsync` (one IMAP session; archive groups by expanded folder). MCP/CLI accept comma-separated `uids`.
+- `AddAppointment`: recurrence via `RecurrenceRule` (RRULE) or simple `RecurrenceFrequency` (`daily`/`weekly`) + `RecurrenceCount` / `RecurrenceUntil`.
+- Default timezone **Europe/Berlin** when `timeZoneId` is omitted on add/update — never drops offsets into floating local time (`ResolveEventDateTimes`).
+
+### Versions
+
+- **Ironbrain.Email 0.1.4** / **Ironbrain.Calendar 0.1.4**. Tools **0.1.5**.
+
 ## [0.1.4] — 2026-10-20
 
 ### Added

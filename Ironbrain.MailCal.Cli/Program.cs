@@ -100,19 +100,54 @@ root.Subcommands.Add(mail);
 var limitOpt = new Option<int>("--limit") { Description = "Max messages", DefaultValueFactory = _ => 20 };
 var offsetOpt = new Option<int>("--offset") { Description = "Offset from newest", DefaultValueFactory = _ => 0 };
 var mailboxOpt = new Option<string?>("--mailbox") { Description = "Override IMAP mailbox (default from account config)" };
+var unreadOpt = new Option<bool?>("--unread") { Description = "When set, filter unread (true) or read (false)" };
+var sinceOpt = new Option<DateTimeOffset?>("--since") { Description = "Inclusive lower bound on delivery date (ISO-8601)" };
+var beforeOpt = new Option<DateTimeOffset?>("--before") { Description = "Exclusive upper bound on delivery date (ISO-8601)" };
+var fromContainsOpt = new Option<string?>("--from-contains") { Description = "Substring match on From" };
+var subjectContainsOpt = new Option<string?>("--subject-contains") { Description = "Substring match on Subject" };
 
-var mailList = new Command("list", "List recent messages from the IMAP mailbox");
+var mailList = new Command("list", "List messages from the IMAP mailbox (filters + totalCount/nextOffset)");
 mailList.Options.Add(limitOpt);
 mailList.Options.Add(offsetOpt);
 mailList.Options.Add(mailboxOpt);
+mailList.Options.Add(unreadOpt);
+mailList.Options.Add(sinceOpt);
+mailList.Options.Add(beforeOpt);
+mailList.Options.Add(fromContainsOpt);
+mailList.Options.Add(subjectContainsOpt);
 mailList.SetAction(async (parseResult, ct) =>
 {
     var (sp, catalog, configuration) = Open(parseResult);
     await using (sp)
     {
         var (email, _, _) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt);
-        var items = await email.ListInboxAsync(parseResult.GetValue(limitOpt), parseResult.GetValue(offsetOpt), userId: null, ct);
-        ConfigLoader.WriteJson(items);
+        EmailListFilter? filter = null;
+        var unread = parseResult.GetValue(unreadOpt);
+        var since = parseResult.GetValue(sinceOpt);
+        var before = parseResult.GetValue(beforeOpt);
+        var fromContains = parseResult.GetValue(fromContainsOpt);
+        var subjectContains = parseResult.GetValue(subjectContainsOpt);
+        if (unread.HasValue || since.HasValue || before.HasValue
+            || !string.IsNullOrWhiteSpace(fromContains) || !string.IsNullOrWhiteSpace(subjectContains))
+        {
+            filter = new EmailListFilter
+            {
+                Unread = unread,
+                Since = since,
+                Before = before,
+                FromContains = fromContains,
+                SubjectContains = subjectContains
+            };
+        }
+
+        var result = await email.ListInboxAsync(
+            parseResult.GetValue(limitOpt),
+            parseResult.GetValue(offsetOpt),
+            userId: null,
+            ct,
+            parseResult.GetValue(mailboxOpt),
+            filter: filter);
+        ConfigLoader.WriteJson(result);
     }
 });
 mail.Subcommands.Add(mailList);
