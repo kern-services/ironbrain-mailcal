@@ -160,6 +160,272 @@ public class MailSaveDraftTests
     }
 
     [Fact]
+    public async Task BuildDraftMimeAsync_TextReplyToHtmlOriginal_PutsReplyBeforeBlockquote()
+    {
+        var original = BuildHtmlOriginal(
+            """
+            <!DOCTYPE html>
+            <html><head><meta charset="iso-8859-1"><style>p{color:red}</style></head>
+            <body><p>Original HTML body</p></body></html>
+            """);
+
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Thanks for the update",
+            QuoteOriginal = true,
+            ReplyToMessageId = "42"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.False(string.IsNullOrWhiteSpace(mime.HtmlBody));
+        var html = mime.HtmlBody!;
+        var replyIdx = html.IndexOf("Thanks for the update", StringComparison.Ordinal);
+        var quoteIdx = html.IndexOf("<blockquote type=\"cite\">", StringComparison.Ordinal);
+        Assert.True(replyIdx >= 0, "reply text missing from HtmlBody");
+        Assert.True(quoteIdx > replyIdx, "reply must appear before blockquote");
+        Assert.Contains("Original HTML body", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<!DOCTYPE", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<html", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<head", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<meta", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("iso-8859-1", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BuildDraftMimeAsync_HtmlOnlyOriginal_TextQuoteViaHtmlToText()
+    {
+        var original = BuildHtmlOriginal("<html><body><p>Nur HTML Inhalt</p></body></html>");
+
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Antwort",
+            QuoteOriginal = true,
+            ReplyToMessageId = "7"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.Contains("Antwort", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("> ", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Nur HTML Inhalt", mime.TextBody, StringComparison.Ordinal);
+        // Quote lines must not be blank after the header.
+        var afterHeader = mime.TextBody!.Split(["wrote:"], StringSplitOptions.None).Last();
+        Assert.Contains("Nur HTML", afterHeader, StringComparison.Ordinal);
+        Assert.Contains("> Nur HTML Inhalt", mime.TextBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BuildDraftMimeAsync_OutlookStyleHtmlOnly_SkipsHeadChromeInTextQuote()
+    {
+        // Real-world Outlook HTML: @font-face / MsoNormal in <head>, body styles, list.
+        var outlookHtml = """
+            <!DOCTYPE html>
+            <html xmlns:o="urn:schemas-microsoft-com:office:office"
+                  xmlns:w="urn:schemas-microsoft-com:office:word">
+            <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+            <style>
+            @font-face { font-family: "Calibri"; panose-1: 2 15 5 2 2 2 4 3 2 4; }
+            p.MsoNormal, li.MsoNormal, div.MsoNormal {
+              margin: 0cm; font-size: 11.0pt; font-family: "Calibri",sans-serif;
+            }
+            </style>
+            <title>Meeting notes</title>
+            <script>var x = "should not appear";</script>
+            </head>
+            <body lang="DE" link="#0563C1">
+            <div class="MsoNormal">Bitte die <b>Grüße</b> prüfen.</div>
+            <ul><li class="MsoNormal">Punkt eins</li><li class="MsoNormal">Punkt zwei</li></ul>
+            <hr>
+            <style>.MsoChpDefault { font-size: 10pt; }</style>
+            <meta name="Generator" content="Microsoft Word">
+            <p class="MsoNormal">Schlusszeile</p>
+            </body>
+            </html>
+            """;
+        var original = BuildHtmlOriginal(outlookHtml);
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Danke",
+            QuoteOriginal = true,
+            ReplyToMessageId = "55"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.Contains("Grüße", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Punkt eins", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Schlusszeile", mime.TextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("@font-face", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Calibri", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("MsoChpDefault", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("should not appear", mime.TextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("Meeting notes", mime.TextBody, StringComparison.Ordinal);
+
+        var html = mime.HtmlBody!;
+        Assert.Contains("Grüße", System.Net.WebUtility.HtmlDecode(html), StringComparison.Ordinal);
+        Assert.DoesNotContain("@font-face", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<meta", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<style", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<head", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildDraftMimeAsync_QuoteStripsNestedDocumentChrome()
+    {
+        var original = BuildHtmlOriginal(
+            """
+            <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+            <html><head><meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+            <title>x</title></head><body bgcolor="#ffffff"><div>Inner only</div></body></html>
+            """);
+
+        var quoted = MailKitEmailService.AppendQuotedOriginalHtml(
+            htmlBody: null, textBody: "Hi", original);
+
+        Assert.NotNull(quoted);
+        Assert.Contains("<blockquote type=\"cite\">", quoted);
+        Assert.Contains("Inner only", quoted);
+        Assert.DoesNotContain("<!DOCTYPE", quoted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<html", quoted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<head", quoted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<meta", quoted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("charset=", quoted, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BuildDraftMimeAsync_UmlautsUtf8RoundTrip_BothParts()
+    {
+        var original = new MimeMessage();
+        original.From.Add(MailboxAddress.Parse("alice@example.com"));
+        original.MessageId = "<umlaut@example.com>";
+        original.Subject = "Größe";
+        original.Date = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        original.Body = new TextPart("plain") { Text = "Schöne Grüße aus Köln" };
+
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Danke schön — Grüße",
+            QuoteOriginal = true,
+            ReplyToMessageId = "9"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        // Real MIME round-trip: write → parse → charset + content survive.
+        using var stream = new MemoryStream();
+        await mime.WriteToAsync(stream);
+        stream.Position = 0;
+        var parsed = await MimeMessage.LoadAsync(stream);
+
+        Assert.Equal("Re: Größe", parsed.Subject);
+        Assert.Contains("Grüße", parsed.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Schöne Grüße aus Köln", parsed.TextBody, StringComparison.Ordinal);
+
+        var textPart = parsed.BodyParts.OfType<TextPart>().First(p => p.IsPlain);
+        var htmlPart = parsed.BodyParts.OfType<TextPart>().First(p => p.IsHtml);
+        Assert.Contains("utf-8", textPart.ContentType.Charset ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("utf-8", htmlPart.ContentType.Charset ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var htmlDecoded = System.Net.WebUtility.HtmlDecode(parsed.HtmlBody);
+        Assert.Contains("Grüße", htmlDecoded, StringComparison.Ordinal);
+        Assert.Contains("Schöne Grüße aus Köln", htmlDecoded, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BuildDraftMimeAsync_ExplicitHtmlBodyKept_BeforeQuote()
+    {
+        var original = BuildHtmlOriginal("<body><p>Orig</p></body>");
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            HtmlBody = "<p>Explicit reply</p>",
+            TextBody = "should not replace html",
+            QuoteOriginal = true,
+            ReplyToMessageId = "3"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.Contains("<p>Explicit reply</p>", mime.HtmlBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("should not replace html", mime.HtmlBody!, StringComparison.Ordinal);
+        var html = mime.HtmlBody!;
+        Assert.True(
+            html.IndexOf("Explicit reply", StringComparison.Ordinal)
+            < html.IndexOf("<blockquote type=\"cite\">", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildDraftMimeAsync_QuoteOriginalFalse_StaysSingleTextPlain()
+    {
+        var original = BuildHtmlOriginal("<body><p>Should not appear</p></body>");
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Just a draft",
+            QuoteOriginal = false,
+            ReplyToMessageId = "1"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.Equal("Just a draft", mime.TextBody);
+        Assert.True(string.IsNullOrEmpty(mime.HtmlBody));
+        Assert.DoesNotContain("Should not appear", mime.TextBody ?? string.Empty, StringComparison.Ordinal);
+        // Single text/plain body part (not multipart/alternative).
+        Assert.IsType<TextPart>(mime.Body);
+        var textPart = (TextPart)mime.Body;
+        Assert.True(textPart.IsPlain);
+    }
+
+    [Fact]
+    public void EmailNotFoundException_CarriesIdAndMailbox_ForHost404Mapping()
+    {
+        var ex = new EmailNotFoundException("901", "INBOX");
+        Assert.Equal("901", ex.EmailId);
+        Assert.Equal("INBOX", ex.Mailbox);
+        Assert.Contains("901", ex.Message, StringComparison.Ordinal);
+        Assert.IsAssignableFrom<InvalidOperationException>(ex);
+    }
+
+    [Fact]
+    public void ExtractHtmlBodyInner_PrefersBodyInnerContent()
+    {
+        var inner = MailKitEmailService.ExtractHtmlBodyInner(
+            "<!DOCTYPE html><html><head><meta charset=\"iso-8859-1\"></head><body><p>Hi</p></body></html>");
+        Assert.Equal("<p>Hi</p>", inner);
+    }
+
+    [Fact]
+    public void PlainTextToHtml_EncodesAndBreaksLines()
+    {
+        var html = MailKitEmailService.PlainTextToHtml("A < B\nC & D");
+        Assert.Equal("<div>A &lt; B<br>C &amp; D</div>", html);
+    }
+
+    private static MimeMessage BuildHtmlOriginal(string html)
+    {
+        var original = new MimeMessage();
+        original.From.Add(MailboxAddress.Parse("alice@example.com"));
+        original.MessageId = "<html-orig@example.com>";
+        original.Subject = "Status";
+        original.Date = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        original.Body = new TextPart("html") { Text = html };
+        return original;
+    }
+
+    [Fact]
     public void FormatAddressList_JoinsRecipients()
     {
         var list = new InternetAddressList

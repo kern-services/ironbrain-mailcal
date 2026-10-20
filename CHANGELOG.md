@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-10-20
+
+### Fixed
+
+- `SaveDraft` with `quoteOriginal`: text-only replies produce a real HTML part (`PlainTextToHtml`) before `<blockquote type="cite">` instead of a quote-only / empty reply HTML body.
+- Quoted HTML uses only the original `<body>` inner content (strips doctype / html / head / meta / charset declarations; also strips meta/base/link/style chrome inside body).
+- HTML-only originals: text quote via MimeKit `HtmlTokenizer` (Html → Plain; skips style/script/title/head) so `>` lines are not empty.
+
+### Follow-up (not in this release)
+
+- Sanitize quoted HTML (`script` / `iframe` / `object` / `embed` / `form` / `base` / `on*`) via MimeKit `HtmlToHtml` filter.
+
+### Versions
+
+- **Ironbrain.Email 0.1.6** / **Ironbrain.Calendar 0.1.6** / tools **0.1.6** (single `lib_version` for Trusted Publishing). Open [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) will renumber to **0.1.7**.
+
 ## [0.1.5] — 2026-10-20
 
 ### Added
