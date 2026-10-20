@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - List results populate `Href`, `ETag`, `RecurrenceId`, `IsRecurring` so clients can target a single occurrence.
 - CLI: `cal update` / `cal delete`; MCP: `update_appointment` / `delete_appointment`.
 
+### Versions
+
+- Libraries published together as **Ironbrain.Email 0.1.3** / **Ironbrain.Calendar 0.1.3** (single `lib_version`; the 0.1.2 Calendar bridge build predates the review fixes). Tools 0.1.4.
+
 ### Fixed (review)
 
 - Update/delete no longer fall back to a non-matching resource when the CalDAV UID text-match (substring) returns no exact UID match.
