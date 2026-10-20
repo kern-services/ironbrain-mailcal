@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Recurring occurrence `End` no longer collapses to `Start` when Ical.Net leaves `Period.EndTime` null.
+  `ParseOccurrences` resolves end as occurrence period end → occurrence duration →
+  `occurrenceStart + (master DTEND − DTSTART)` / master `DURATION` — never the master's absolute `DTEND`.
+  Fixes zero-duration Freigabe snapshots (`beforeStart` == `beforeEnd`) and `list_appointments` for later RRULE instances.
+
+### Versions
+
+- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (on top of [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs **0.1.6**).
+
 ## [0.1.6] — 2026-10-20
 
 ### Fixed
@@ -21,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Versions
 
-- **Ironbrain.Email 0.1.6** / **Ironbrain.Calendar 0.1.6** / tools **0.1.6** (single `lib_version` for Trusted Publishing). Open [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) will renumber to **0.1.7**.
+- **Ironbrain.Email 0.1.6** / **Ironbrain.Calendar 0.1.6** / tools **0.1.6** (single `lib_version` for Trusted Publishing). Open [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) renumbers to **0.1.7**.
 
 ## [0.1.5] — 2026-10-20
 

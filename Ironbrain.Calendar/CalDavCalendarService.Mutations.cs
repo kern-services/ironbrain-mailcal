@@ -306,9 +306,7 @@ public sealed partial class CalDavCalendarService
 
     private static CalendarEvent CloneAsOccurrenceOverride(CalendarEvent master, CalDateTime recurrenceId)
     {
-        var duration = master.End is not null && master.Start is not null
-            ? master.End.AsUtc - master.Start.AsUtc
-            : TimeSpan.FromHours(1);
+        var duration = TryGetEventDuration(master) ?? TimeSpan.FromHours(1);
         var end = new CalDateTime(recurrenceId.AsUtc.Add(duration), recurrenceId.TzId);
 
         return new CalendarEvent

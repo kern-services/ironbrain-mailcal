@@ -568,6 +568,178 @@ public class CalDavCalendarServiceTests
                 Assert.Contains("/Calendar/personal/recur-1.ics", a.Href, StringComparison.Ordinal);
             });
             Assert.Equal(new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc), items[0].RecurrenceId);
+            // Later occurrences must keep series duration (not collapse End to Start).
+            Assert.Equal(TimeSpan.FromHours(1), items[0].End - items[0].Start);
+        }
+        finally
+        {
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task List_RecurringOccurrence_EndIsStartPlusSeriesDuration()
+    {
+        // Repro: Josh Training style — TZID master; Ical.Net leaves Period.EndTime null and
+        // only sets Period.Duration. Falling back to master DTEND made later occurrences
+        // zero-length (beforeStart == beforeEnd).
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:A6A4C182-josh@ironbrain
+            DTSTART;TZID=Europe/Berlin:20260922T191500
+            DTEND;TZID=Europe/Berlin:20260922T201500
+            RRULE:FREQ=WEEKLY;COUNT=8
+            SUMMARY:Josh Training
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var reportXml = BuildReportMultistatus("/Calendar/personal/josh.ics", "\"etag-j\"", ics);
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        var serve = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var bytes = Encoding.UTF8.GetBytes(reportXml);
+            ctx.Response.StatusCode = 207;
+            ctx.Response.ContentType = "application/xml";
+            ctx.Response.OutputStream.Write(bytes);
+            ctx.Response.Close();
+        });
+
+        try
+        {
+            var sut = CreateSut(prefix + "Calendar/personal/");
+            // 2026-10-20 is a later weekly occurrence (not the series DTSTART day).
+            var items = await sut.GetAppointmentsForDayAsync(
+                "2026-10-20",
+                new CalendarQueryOptions { CalendarUrl = prefix + "Calendar/personal/" });
+
+            Assert.Single(items);
+            var occ = items[0];
+            Assert.Equal("Josh Training", occ.Summary);
+            Assert.Equal(new DateTime(2026, 10, 20, 17, 15, 0, DateTimeKind.Utc), occ.Start);
+            Assert.Equal(new DateTime(2026, 10, 20, 18, 15, 0, DateTimeKind.Utc), occ.End);
+            Assert.Equal(TimeSpan.FromHours(1), occ.End - occ.Start);
+            Assert.Equal(occ.Start, occ.RecurrenceId);
+            Assert.True(occ.IsRecurring);
+        }
+        finally
+        {
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task List_RecurringOccurrence_UsesDurationProperty_WhenNoDtend()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:dur-only@ironbrain
+            DTSTART:20261013T100000Z
+            DURATION:PT1H30M
+            RRULE:FREQ=WEEKLY;COUNT=3
+            SUMMARY:Duration series
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var reportXml = BuildReportMultistatus("/Calendar/personal/dur.ics", "\"etag-d\"", ics);
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        var serve = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var bytes = Encoding.UTF8.GetBytes(reportXml);
+            ctx.Response.StatusCode = 207;
+            ctx.Response.ContentType = "application/xml";
+            ctx.Response.OutputStream.Write(bytes);
+            ctx.Response.Close();
+        });
+
+        try
+        {
+            var sut = CreateSut(prefix + "Calendar/personal/");
+            var items = await sut.GetAppointmentsForDayAsync(
+                "2026-10-20",
+                new CalendarQueryOptions { CalendarUrl = prefix + "Calendar/personal/" });
+
+            Assert.Single(items);
+            Assert.Equal(new DateTime(2026, 10, 20, 10, 0, 0, DateTimeKind.Utc), items[0].Start);
+            Assert.Equal(new DateTime(2026, 10, 20, 11, 30, 0, DateTimeKind.Utc), items[0].End);
+        }
+        finally
+        {
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task List_RecurringOccurrence_OverrideVevent_UsesOverrideEnd()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:ov@ironbrain
+            DTSTART:20260922T171500Z
+            DTEND:20260922T181500Z
+            RRULE:FREQ=WEEKLY;COUNT=4
+            SUMMARY:Master
+            END:VEVENT
+            BEGIN:VEVENT
+            UID:ov@ironbrain
+            RECURRENCE-ID:20261020T171500Z
+            DTSTART:20261020T171500Z
+            DTEND:20261020T191500Z
+            SUMMARY:Override longer
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var reportXml = BuildReportMultistatus("/Calendar/personal/ov.ics", "\"etag-o\"", ics);
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        var serve = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var bytes = Encoding.UTF8.GetBytes(reportXml);
+            ctx.Response.StatusCode = 207;
+            ctx.Response.ContentType = "application/xml";
+            ctx.Response.OutputStream.Write(bytes);
+            ctx.Response.Close();
+        });
+
+        try
+        {
+            var sut = CreateSut(prefix + "Calendar/personal/");
+            var items = await sut.GetAppointmentsForDayAsync(
+                "2026-10-20",
+                new CalendarQueryOptions { CalendarUrl = prefix + "Calendar/personal/" });
+
+            // Master expansion + override both match the day; prefer the override's 2h end when present.
+            Assert.Contains(items, a =>
+                a.Summary == "Override longer"
+                && a.Start == new DateTime(2026, 10, 20, 17, 15, 0, DateTimeKind.Utc)
+                && a.End == new DateTime(2026, 10, 20, 19, 15, 0, DateTimeKind.Utc));
+            Assert.All(items.Where(a => a.Uid == "ov@ironbrain"), a =>
+                Assert.True(a.End > a.Start, $"zero-duration occurrence at {a.Start:o}"));
         }
         finally
         {

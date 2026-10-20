@@ -500,15 +500,8 @@ public sealed partial class CalDavCalendarService(
         foreach (var (occ, evt, href, etag) in occurrences)
         {
             var startTime = occ.Period?.StartTime;
-            var endTime = occ.Period?.EndTime;
             var startDt = startTime?.AsUtc ?? AsUtcFallback(rangeStart);
-            DateTime endDt;
-            if (endTime?.AsUtc is { } explicitEnd && explicitEnd > startDt)
-                endDt = explicitEnd;
-            else if (evt?.End?.AsUtc is { } evtEnd && evtEnd > startDt)
-                endDt = evtEnd;
-            else
-                endDt = startDt;
+            var endDt = ResolveOccurrenceEndUtc(occ, evt, startDt);
 
             var isRecurring = IsRecurringEvent(evt);
             DateTime? recurrenceId = null;
@@ -537,6 +530,66 @@ public sealed partial class CalDavCalendarService(
 
         list.Sort((a, b) => a.Start.CompareTo(b.Start));
         return list;
+    }
+
+    /// <summary>
+    /// End of an expanded occurrence. Ical.Net often leaves <c>Period.EndTime</c> null for RRULE
+    /// expansions and only sets <c>Period.Duration</c>; the master VEVENT's DTEND is the first
+    /// instance only and must not be used as an absolute end for later occurrences.
+    /// Prefer: period end → period/event duration (or DTEND−DTSTART) → absolute event end if after start.
+    /// Override VEVENTs carry their own DTEND/DURATION and are handled the same way.
+    /// </summary>
+    internal static DateTime ResolveOccurrenceEndUtc(
+        Ical.Net.DataTypes.Occurrence occ,
+        CalendarEvent? evt,
+        DateTime startUtc)
+    {
+        if (occ.Period?.EndTime?.AsUtc is { } periodEnd && periodEnd > startUtc)
+            return periodEnd;
+
+        if (TryToTimeSpan(occ.Period?.Duration) is { } periodDuration && periodDuration > TimeSpan.Zero)
+            return startUtc.Add(periodDuration);
+
+        if (TryGetEventDuration(evt) is { } eventDuration && eventDuration > TimeSpan.Zero)
+            return startUtc.Add(eventDuration);
+
+        if (evt?.End?.AsUtc is { } evtEnd && evtEnd > startUtc)
+            return evtEnd;
+
+        return startUtc;
+    }
+
+    private static TimeSpan? TryGetEventDuration(CalendarEvent? evt)
+    {
+        if (evt is null)
+            return null;
+
+        if (TryToTimeSpan(evt.Duration) is { } fromProp && fromProp > TimeSpan.Zero)
+            return fromProp;
+
+        if (evt.Start is not null && evt.End is not null)
+        {
+            var span = evt.End.AsUtc - evt.Start.AsUtc;
+            if (span > TimeSpan.Zero)
+                return span;
+        }
+
+        return null;
+    }
+
+    private static TimeSpan? TryToTimeSpan(Ical.Net.DataTypes.Duration? duration)
+    {
+        if (duration is null)
+            return null;
+        try
+        {
+            var span = duration.Value.ToTimeSpanUnspecified();
+            return span > TimeSpan.Zero ? span : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool IsRecurringEvent(CalendarEvent? evt)
