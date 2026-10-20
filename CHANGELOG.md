@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `EmailSendRequest` optional `Cc` / `Bcc`; `SendEmailAsync` wires them through MimeKit `AddAddresses` (same path as SaveDraft).
+
 ### Fixed
 
 - Recurring occurrence `End` no longer collapses to `Start` when Ical.Net leaves `Period.EndTime` null.

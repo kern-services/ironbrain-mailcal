@@ -352,7 +352,9 @@ public sealed class MailKitEmailService(
 
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(smtp.FromName, smtp.FromAddress));
-        message.To.Add(MailboxAddress.Parse(request.To));
+        AddAddresses(message.To, request.To);
+        AddAddresses(message.Cc, request.Cc);
+        AddAddresses(message.Bcc, request.Bcc);
         message.Subject = request.Subject;
         message.Body = new BodyBuilder
         {
@@ -1488,7 +1490,11 @@ public sealed class MailKitEmailService(
         return string.Join(", ", list.Select(a => a.ToString()));
     }
 
-    private static void AddAddresses(InternetAddressList target, string? raw)
+    /// <summary>
+    /// Parses comma/semicolon-separated address lists with MimeKit (same path as SMTP send).
+    /// Exposed to tests via InternalsVisibleTo.
+    /// </summary>
+    internal static void AddAddresses(InternetAddressList target, string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return;
@@ -1500,6 +1506,24 @@ public sealed class MailKitEmailService(
             else
                 throw new ArgumentException($"Invalid email address '{part}'.", nameof(raw));
         }
+    }
+
+    /// <summary>Builds the outbound MIME for unit tests (From + To/Cc/Bcc + subject/body).</summary>
+    internal static MimeMessage BuildSendMime(EmailSendRequest request, string fromAddress, string? fromName = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var message = new MimeMessage();
+        message.From.Add(new MailboxAddress(fromName ?? fromAddress, fromAddress));
+        AddAddresses(message.To, request.To);
+        AddAddresses(message.Cc, request.Cc);
+        AddAddresses(message.Bcc, request.Bcc);
+        message.Subject = request.Subject;
+        message.Body = new BodyBuilder
+        {
+            TextBody = request.TextBody,
+            HtmlBody = request.HtmlBody
+        }.ToMessageBody();
+        return message;
     }
 
     private void PreferSafeSasl(IMailService client)
