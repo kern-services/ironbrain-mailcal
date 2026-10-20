@@ -22,6 +22,18 @@ public sealed class CalendarAppointment
     /// <summary>CalDAV resource href when known (needed for update/delete).</summary>
     public string? Href { get; set; }
 
+    /// <summary>CalDAV getetag when known (If-Match on update/delete).</summary>
+    public string? ETag { get; set; }
+
+    /// <summary>
+    /// Occurrence identity for recurring series members (UTC). Null for non-recurring events.
+    /// Pass to update/delete to target a single occurrence; omit to target the whole series.
+    /// </summary>
+    public DateTime? RecurrenceId { get; set; }
+
+    /// <summary>True when the underlying VEVENT has an RRULE/RDATE or is a RECURRENCE-ID override.</summary>
+    public bool IsRecurring { get; set; }
+
     /// <summary>Display name of the calendar collection this event came from.</summary>
     public string? CalendarName { get; set; }
 
@@ -89,4 +101,56 @@ public sealed class CalendarAddRequest
     /// Optional host calendar account id. When null, the host uses the first calendar config.
     /// </summary>
     public string? AccountId { get; set; }
+}
+
+/// <summary>
+/// Partial update of an existing event keyed by <see cref="Uid"/> + calendar.
+/// Only non-null field properties are applied. Omit <see cref="RecurrenceId"/> for the whole series.
+/// </summary>
+public sealed class CalendarUpdateRequest
+{
+    /// <summary>iCalendar UID from list_appointments.</summary>
+    public required string Uid { get; set; }
+
+    /// <summary>Calendar display name or collection id (from list_calendars / list_appointments).</summary>
+    public string? CalendarSelector { get; set; }
+
+    public string? CalendarUrl { get; set; }
+    public string? AccountId { get; set; }
+
+    /// <summary>
+    /// When set, update only this occurrence (writes/overrides a RECURRENCE-ID VEVENT).
+    /// When null, update the master / whole series.
+    /// </summary>
+    public DateTime? RecurrenceId { get; set; }
+
+    /// <summary>Optional known ETag; when null the current ETag is fetched first.</summary>
+    public string? ETag { get; set; }
+
+    public string? Summary { get; set; }
+    public DateTime? Start { get; set; }
+    public DateTime? End { get; set; }
+    public string? Location { get; set; }
+    public string? Description { get; set; }
+    public string? TimeZoneId { get; set; }
+}
+
+/// <summary>
+/// Delete an existing event keyed by <see cref="Uid"/> + calendar.
+/// Omit <see cref="RecurrenceId"/> to delete the whole series; set it to remove one occurrence (EXDATE / cancel override).
+/// </summary>
+public sealed class CalendarDeleteRequest
+{
+    public required string Uid { get; set; }
+    public string? CalendarSelector { get; set; }
+    public string? CalendarUrl { get; set; }
+    public string? AccountId { get; set; }
+
+    /// <summary>
+    /// When set, delete only this occurrence (EXDATE on master, or remove RECURRENCE-ID override).
+    /// When null, DELETE the whole series resource.
+    /// </summary>
+    public DateTime? RecurrenceId { get; set; }
+
+    public string? ETag { get; set; }
 }

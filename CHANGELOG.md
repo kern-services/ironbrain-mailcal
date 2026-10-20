@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-10-20
+
+### Added
+
+- `ICalendarService.UpdateAppointmentAsync` / `DeleteAppointmentAsync` keyed by UID + calendar (CalDAV PUT/DELETE with If-Match/ETag; SEQUENCE bump on update).
+- Recurring scopes: omit `recurrenceId` for whole series; set it for one occurrence (update → RECURRENCE-ID override; delete → EXDATE / cancel override).
+- List results populate `Href`, `ETag`, `RecurrenceId`, `IsRecurring` so clients can target a single occurrence.
+- CLI: `cal update` / `cal delete`; MCP: `update_appointment` / `delete_appointment`.
+
+### Versions
+
+- Libraries published together as **Ironbrain.Email 0.1.3** / **Ironbrain.Calendar 0.1.3** (single `lib_version`; the 0.1.2 Calendar bridge build predates the review fixes). Tools 0.1.4.
+
+### Fixed (review)
+
+- Update/delete no longer fall back to a non-matching resource when the CalDAV UID text-match (substring) returns no exact UID match.
+- Occurrence RECURRENCE-ID / EXDATE for TZID masters converts the UTC occurrence start to the master zone's wall-clock time.
+
+### Changed
+
+- Shared lib package version **0.1.2** (`Ironbrain.Calendar`); tools **0.1.4**.
+
 ## [0.1.3] — 2026-10-10
 
 ### Added

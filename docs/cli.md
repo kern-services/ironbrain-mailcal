@@ -225,11 +225,31 @@ Example Cursor MCP config snippet:
 }
 ```
 
-Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; `add_appointment` accepts `calendar` (name/id) and never writes to all calendars. `move_email` / `archive_email` mirror the CLI (UID MOVE with COPY+DELETE fallback; archive uses `Email:Imap:ArchiveFolder`, default `Archive/{CurrentYear}`).
+Tools: `list_accounts`, `list_calendars`, `list_emails`, `get_email`, `send_email`, `move_email`, `archive_email`, `get_appointments_for_day`, `get_appointments_for_week`, `add_appointment`, `update_appointment`, `delete_appointment` — each mail/calendar tool accepts optional `account`. Appointment tools accept optional `calendars` (comma-separated filters) and `includeShared`; write tools accept `calendar` (name/id) and never write to all calendars. `update_appointment` / `delete_appointment` key by `uid` (+ optional `recurrenceId` for one occurrence). `move_email` / `archive_email` mirror the CLI (UID MOVE with COPY+DELETE fallback; archive uses `Email:Imap:ArchiveFolder`, default `Archive/{CurrentYear}`).
+
+## Calendar update / delete
+
+```bash
+# Partial update (location only) — whole series when --recurrence-id omitted
+ironbrain-mailcal -a family-cal cal update -c Family \
+  --uid 'ironbrain-….@ironbrain' \
+  --location "Kitchen"
+
+# One occurrence of a recurring series (recurrenceId / start from cal list)
+ironbrain-mailcal -a family-cal cal update -c Family \
+  --uid 'ironbrain-….@ironbrain' \
+  --recurrence-id "2026-10-22T10:00:00Z" \
+  --summary "Standup (moved)"
+
+# Delete one occurrence (EXDATE) or whole series
+ironbrain-mailcal -a family-cal cal delete -c Family --uid '…' --recurrence-id "2026-10-22T10:00:00Z"
+ironbrain-mailcal -a family-cal cal delete -c Family --uid '…'
+```
+
+List rows for recurring events include `recurrenceId` (occurrence start UTC) and `isRecurring`. Updates use CalDAV PUT with `If-Match`/ETag and bump `SEQUENCE`; ETag conflicts surface as 412.
 
 ## MVP gaps (intentional)
 
-- No CalDAV **update/delete** of existing events yet (add + list only); `Href` is reserved on the model for a later edit path.
 - Mail **reply** does not set `In-Reply-To` / `References` headers yet (subject/`Re:` + original From only).
 - No CardDAV / contacts tools in this package.
 - MCP package version may track the official `ModelContextProtocol` NuGet line; pin a version that builds in your environment if needed.

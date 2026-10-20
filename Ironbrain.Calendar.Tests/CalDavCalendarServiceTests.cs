@@ -519,6 +519,621 @@ public class CalDavCalendarServiceTests
         }
     }
 
+    [Fact]
+    public async Task List_PopulatesHrefETagAndRecurrenceId_ForRecurringSeries()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:recur-1@ironbrain
+            DTSTART:20260928T100000Z
+            DTEND:20260928T110000Z
+            RRULE:FREQ=DAILY;COUNT=3
+            SUMMARY:Daily standup
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var reportXml = BuildReportMultistatus("/Calendar/personal/recur-1.ics", "\"etag-r1\"", ics);
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        var serve = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var bytes = Encoding.UTF8.GetBytes(reportXml);
+            ctx.Response.StatusCode = 207;
+            ctx.Response.ContentType = "application/xml";
+            ctx.Response.OutputStream.Write(bytes);
+            ctx.Response.Close();
+        });
+
+        try
+        {
+            var sut = CreateSut(prefix + "Calendar/personal/");
+            var items = await sut.GetAppointmentsForDayAsync(
+                "2026-09-28",
+                new CalendarQueryOptions { CalendarUrl = prefix + "Calendar/personal/" });
+
+            Assert.NotEmpty(items);
+            Assert.All(items, a =>
+            {
+                Assert.Equal("recur-1@ironbrain", a.Uid);
+                Assert.True(a.IsRecurring);
+                Assert.NotNull(a.RecurrenceId);
+                Assert.Equal("\"etag-r1\"", a.ETag);
+                Assert.Contains("/Calendar/personal/recur-1.ics", a.Href, StringComparison.Ordinal);
+            });
+            Assert.Equal(new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc), items[0].RecurrenceId);
+        }
+        finally
+        {
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAppointment_PartialLocation_PutsWithIfMatch_AndBumpsSequence()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:evt-1@ironbrain
+            DTSTART:20260928T140000Z
+            DTEND:20260928T150000Z
+            SUMMARY:Sync
+            LOCATION:Berlin
+            SEQUENCE:1
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? putBody = null;
+        string? ifMatch = null;
+        string? putPath = null;
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var report = BuildReportMultistatus("/Calendar/personal/evt-1.ics", "\"etag-v1\"", ics);
+                    var bytes = Encoding.UTF8.GetBytes(report);
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    putPath = ctx.Request.Url?.AbsolutePath;
+                    ifMatch = ctx.Request.Headers["If-Match"];
+                    using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                    putBody = await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            var msg = await sut.UpdateAppointmentAsync(new CalendarUpdateRequest
+            {
+                Uid = "evt-1@ironbrain",
+                CalendarUrl = collection,
+                Location = "Hamburg"
+            });
+
+            Assert.Contains("updated", msg, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("\"etag-v1\"", ifMatch);
+            Assert.Contains("/Calendar/personal/evt-1.ics", putPath, StringComparison.Ordinal);
+            Assert.NotNull(putBody);
+            Assert.Contains("LOCATION:Hamburg", putBody, StringComparison.Ordinal);
+            Assert.Contains("SUMMARY:Sync", putBody, StringComparison.Ordinal);
+            Assert.Contains("SEQUENCE:2", putBody, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAppointment_ETagConflict_Throws()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:evt-conflict@ironbrain
+            DTSTART:20260928T140000Z
+            DTEND:20260928T150000Z
+            SUMMARY:Sync
+            SEQUENCE:0
+            END:VEVENT
+            END:VCALENDAR
+            """;
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var report = BuildReportMultistatus("/Calendar/personal/evt-conflict.ics", "\"etag-old\"", ics);
+                    var bytes = Encoding.UTF8.GetBytes(report);
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    ctx.Response.StatusCode = 412;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                sut.UpdateAppointmentAsync(new CalendarUpdateRequest
+                {
+                    Uid = "evt-conflict@ironbrain",
+                    CalendarUrl = collection,
+                    Summary = "Nope"
+                }));
+            Assert.Contains("412", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("ETag", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAppointment_SingleOccurrence_WritesRecurrenceIdOverride()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:recur-upd@ironbrain
+            DTSTART:20260928T100000Z
+            DTEND:20260928T110000Z
+            RRULE:FREQ=DAILY;COUNT=5
+            SUMMARY:Daily
+            SEQUENCE:0
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? putBody = null;
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var report = BuildReportMultistatus("/Calendar/personal/recur-upd.ics", "\"e1\"", ics);
+                    var bytes = Encoding.UTF8.GetBytes(report);
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                    putBody = await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            await sut.UpdateAppointmentAsync(new CalendarUpdateRequest
+            {
+                Uid = "recur-upd@ironbrain",
+                CalendarUrl = collection,
+                RecurrenceId = new DateTime(2026, 9, 29, 10, 0, 0, DateTimeKind.Utc),
+                Summary = "Daily (moved)"
+            });
+
+            Assert.NotNull(putBody);
+            Assert.Contains("RECURRENCE-ID", putBody, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("SUMMARY:Daily (moved)", putBody, StringComparison.Ordinal);
+            // Master still present
+            Assert.Contains("RRULE:FREQ=DAILY", putBody, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAppointment_Series_SendsDeleteWithIfMatch()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:del-series@ironbrain
+            DTSTART:20260928T140000Z
+            DTEND:20260928T150000Z
+            SUMMARY:Temp
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? deletePath = null;
+        string? ifMatch = null;
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var report = BuildReportMultistatus("/Calendar/personal/del-series.ics", "\"etag-del\"", ics);
+                    var bytes = Encoding.UTF8.GetBytes(report);
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "DELETE")
+                {
+                    deletePath = ctx.Request.Url?.AbsolutePath;
+                    ifMatch = ctx.Request.Headers["If-Match"];
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            var msg = await sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+            {
+                Uid = "del-series@ironbrain",
+                CalendarUrl = collection
+            });
+
+            Assert.Contains("whole series", msg, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("\"etag-del\"", ifMatch);
+            Assert.Contains("/Calendar/personal/del-series.ics", deletePath, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAppointment_SingleOccurrence_AddsExdate()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:recur-del@ironbrain
+            DTSTART:20260928T100000Z
+            DTEND:20260928T110000Z
+            RRULE:FREQ=DAILY;COUNT=5
+            SUMMARY:Daily
+            SEQUENCE:0
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? putBody = null;
+
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var report = BuildReportMultistatus("/Calendar/personal/recur-del.ics", "\"e1\"", ics);
+                    var bytes = Encoding.UTF8.GetBytes(report);
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                    putBody = await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            await sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+            {
+                Uid = "recur-del@ironbrain",
+                CalendarUrl = collection,
+                RecurrenceId = new DateTime(2026, 9, 30, 10, 0, 0, DateTimeKind.Utc)
+            });
+
+            Assert.NotNull(putBody);
+            Assert.Contains("EXDATE", putBody, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("20260930T100000", putBody, StringComparison.Ordinal);
+            Assert.Contains("SEQUENCE:1", putBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("HTTP DELETE", putBody, StringComparison.Ordinal); // still a PUT of master
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAppointment_SingleOccurrence_TzidMaster_ConvertsUtcToWallClock()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:recur-tz@ironbrain
+            DTSTART;TZID=Europe/Berlin:20261020T160000
+            DTEND;TZID=Europe/Berlin:20261020T170000
+            RRULE:FREQ=WEEKLY;COUNT=3
+            SUMMARY:Weekly
+            SEQUENCE:0
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var (putBody, deleteCalled) = await RunMutationAsync(ics, "/Calendar/personal/recur-tz.ics", (sut, collection) =>
+            sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+            {
+                Uid = "recur-tz@ironbrain",
+                CalendarUrl = collection,
+                // 2026-10-27 16:00 Berlin (CET, UTC+1) == 15:00Z
+                RecurrenceId = new DateTime(2026, 10, 27, 15, 0, 0, DateTimeKind.Utc)
+            }));
+
+        Assert.False(deleteCalled);
+        Assert.NotNull(putBody);
+        Assert.Contains("EXDATE;TZID=Europe/Berlin:20261027T160000", putBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteAppointment_UidSubstringMatchOnly_ThrowsAndDoesNotDelete()
+    {
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:abc-123@ironbrain
+            DTSTART:20261020T100000Z
+            DTEND:20261020T110000Z
+            SUMMARY:Other event
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        string? putBody = null;
+        var deleteCalled = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            (putBody, deleteCalled) = await RunMutationAsync(ics, "/Calendar/personal/other.ics", (sut, collection) =>
+                sut.DeleteAppointmentAsync(new CalendarDeleteRequest
+                {
+                    Uid = "abc",
+                    CalendarUrl = collection
+                }));
+        });
+        Assert.Null(putBody);
+        Assert.False(deleteCalled);
+    }
+
+    private static async Task<(string? PutBody, bool DeleteCalled)> RunMutationAsync(
+        string ics,
+        string href,
+        Func<CalDavCalendarService, string, Task<string>> mutate)
+    {
+        string? putBody = null;
+        var deleteCalled = false;
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        using var cts = new CancellationTokenSource();
+        var serve = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); }
+                catch { break; }
+
+                if (ctx.Request.HttpMethod == "REPORT")
+                {
+                    var bytes = Encoding.UTF8.GetBytes(BuildReportMultistatus(href, "\"e1\"", ics));
+                    ctx.Response.StatusCode = 207;
+                    ctx.Response.ContentType = "application/xml";
+                    ctx.Response.OutputStream.Write(bytes);
+                }
+                else if (ctx.Request.HttpMethod == "PUT")
+                {
+                    using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                    putBody = await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = 204;
+                }
+                else if (ctx.Request.HttpMethod == "DELETE")
+                {
+                    deleteCalled = true;
+                    ctx.Response.StatusCode = 204;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                }
+
+                ctx.Response.Close();
+            }
+        }, cts.Token);
+
+        try
+        {
+            var collection = prefix + "Calendar/personal/";
+            var sut = CreateSut(sourceUrl: collection);
+            await mutate(sut, collection);
+            return (putBody, deleteCalled);
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            try { await serve; } catch { /* stopped */ }
+        }
+    }
+
+    private static CalDavCalendarService CreateSut(string? sourceUrl = null, string? homeUrl = null, string? defaultWrite = null)
+    {
+        var options = Options.Create(new CalendarOptions
+        {
+            SourceUrl = sourceUrl,
+            HomeUrl = homeUrl,
+            Username = "u",
+            Password = "p",
+            DefaultWriteCalendar = defaultWrite
+        });
+        var services = new ServiceCollection();
+        services.AddHttpClient(nameof(CalDavCalendarService));
+        var sp = services.BuildServiceProvider();
+        return new CalDavCalendarService(
+            sp.GetRequiredService<IHttpClientFactory>(),
+            options,
+            sp,
+            NullLogger<CalDavCalendarService>.Instance);
+    }
+
+    private static string BuildReportMultistatus(string href, string etag, string ics)
+    {
+        var escaped = System.Security.SecurityElement.Escape(ics) ?? ics;
+        return $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+              <d:response>
+                <d:href>{href}</d:href>
+                <d:propstat>
+                  <d:status>HTTP/1.1 200 OK</d:status>
+                  <d:prop>
+                    <d:getetag>{etag}</d:getetag>
+                    <c:calendar-data>{escaped}</c:calendar-data>
+                  </d:prop>
+                </d:propstat>
+              </d:response>
+            </d:multistatus>
+            """;
+    }
+
     private static int GetFreePort()
     {
         var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);

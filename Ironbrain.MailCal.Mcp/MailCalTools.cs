@@ -188,6 +188,70 @@ public sealed class MailCalTools(
         }, userId: null, cancellationToken);
     }
 
+    [McpServerTool(Name = "update_appointment")]
+    [Description(
+        "Partial-update an appointment by uid + calendar (CalDAV PUT with If-Match/ETag; bumps SEQUENCE). " +
+        "Only provided fields change. Pass recurrenceId (occurrence start from list) to update one instance; omit for whole series.")]
+    public Task<string> UpdateAppointmentAsync(
+        [Description("iCalendar UID from get_appointments_*")] string uid,
+        [Description("Target calendar display name or collection id")] string? calendar = null,
+        [Description("Optional calendar URL override")] string? calendarUrl = null,
+        [Description("New title (omit to leave unchanged)")] string? summary = null,
+        [Description("New start ISO 8601 (omit to leave unchanged)")] string? start = null,
+        [Description("New end ISO 8601 (omit to leave unchanged)")] string? end = null,
+        [Description("New location (omit to leave unchanged)")] string? location = null,
+        [Description("New description (omit to leave unchanged)")] string? description = null,
+        [Description("Optional IANA timezone")] string? timeZoneId = null,
+        [Description("Occurrence start ISO 8601 for single-instance update; omit for whole series")] string? recurrenceId = null,
+        [Description("Optional ETag (fetched when omitted)")] string? etag = null,
+        [Description("Optional account name")] string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, cal, _) = Create(account);
+        return cal.UpdateAppointmentAsync(new CalendarUpdateRequest
+        {
+            Uid = uid,
+            CalendarSelector = calendar,
+            CalendarUrl = calendarUrl,
+            Summary = summary,
+            Start = string.IsNullOrWhiteSpace(start) ? null : CalDavCalendarService.ParseDateTime(start!, nameof(start)),
+            End = string.IsNullOrWhiteSpace(end) ? null : CalDavCalendarService.ParseDateTime(end!, nameof(end)),
+            Location = location,
+            Description = description,
+            TimeZoneId = timeZoneId,
+            RecurrenceId = string.IsNullOrWhiteSpace(recurrenceId)
+                ? null
+                : CalDavCalendarService.ParseDateTime(recurrenceId!, nameof(recurrenceId)),
+            ETag = etag
+        }, userId: null, cancellationToken);
+    }
+
+    [McpServerTool(Name = "delete_appointment")]
+    [Description(
+        "Delete an appointment by uid + calendar. Omit recurrenceId to delete the whole series; " +
+        "pass recurrenceId to remove one occurrence (EXDATE / cancel override). Uses If-Match/ETag.")]
+    public Task<string> DeleteAppointmentAsync(
+        [Description("iCalendar UID from get_appointments_*")] string uid,
+        [Description("Target calendar display name or collection id")] string? calendar = null,
+        [Description("Optional calendar URL override")] string? calendarUrl = null,
+        [Description("Occurrence start ISO 8601 for single-instance delete; omit for whole series")] string? recurrenceId = null,
+        [Description("Optional ETag (fetched when omitted)")] string? etag = null,
+        [Description("Optional account name")] string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, cal, _) = Create(account);
+        return cal.DeleteAppointmentAsync(new CalendarDeleteRequest
+        {
+            Uid = uid,
+            CalendarSelector = calendar,
+            CalendarUrl = calendarUrl,
+            RecurrenceId = string.IsNullOrWhiteSpace(recurrenceId)
+                ? null
+                : CalDavCalendarService.ParseDateTime(recurrenceId!, nameof(recurrenceId)),
+            ETag = etag
+        }, userId: null, cancellationToken);
+    }
+
     private (IEmailService Email, ICalendarService Calendar, ResolvedAccount Account) Create(string? account, string? mailboxOverride = null)
     {
         var resolved = catalog.Resolve(account, configuration);
