@@ -220,6 +220,64 @@ public class MailSaveDraftTests
     }
 
     [Fact]
+    public async Task BuildDraftMimeAsync_OutlookStyleHtmlOnly_SkipsHeadChromeInTextQuote()
+    {
+        // Real-world Outlook HTML: @font-face / MsoNormal in <head>, body styles, list.
+        var outlookHtml = """
+            <!DOCTYPE html>
+            <html xmlns:o="urn:schemas-microsoft-com:office:office"
+                  xmlns:w="urn:schemas-microsoft-com:office:word">
+            <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+            <style>
+            @font-face { font-family: "Calibri"; panose-1: 2 15 5 2 2 2 4 3 2 4; }
+            p.MsoNormal, li.MsoNormal, div.MsoNormal {
+              margin: 0cm; font-size: 11.0pt; font-family: "Calibri",sans-serif;
+            }
+            </style>
+            <title>Meeting notes</title>
+            <script>var x = "should not appear";</script>
+            </head>
+            <body lang="DE" link="#0563C1">
+            <div class="MsoNormal">Bitte die <b>Grüße</b> prüfen.</div>
+            <ul><li class="MsoNormal">Punkt eins</li><li class="MsoNormal">Punkt zwei</li></ul>
+            <hr>
+            <style>.MsoChpDefault { font-size: 10pt; }</style>
+            <meta name="Generator" content="Microsoft Word">
+            <p class="MsoNormal">Schlusszeile</p>
+            </body>
+            </html>
+            """;
+        var original = BuildHtmlOriginal(outlookHtml);
+        var request = new EmailSaveDraftRequest
+        {
+            To = "alice@example.com",
+            TextBody = "Danke",
+            QuoteOriginal = true,
+            ReplyToMessageId = "55"
+        };
+
+        var mime = await MailKitEmailService.BuildDraftMimeAsync(
+            request, "mattanja@kern.services", original, CancellationToken.None);
+
+        Assert.Contains("Grüße", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Punkt eins", mime.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Schlusszeile", mime.TextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("@font-face", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Calibri", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("MsoChpDefault", mime.TextBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("should not appear", mime.TextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("Meeting notes", mime.TextBody, StringComparison.Ordinal);
+
+        var html = mime.HtmlBody!;
+        Assert.Contains("Grüße", System.Net.WebUtility.HtmlDecode(html), StringComparison.Ordinal);
+        Assert.DoesNotContain("@font-face", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<meta", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<style", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<head", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void BuildDraftMimeAsync_QuoteStripsNestedDocumentChrome()
     {
         var original = BuildHtmlOriginal(
@@ -255,7 +313,7 @@ public class MailSaveDraftTests
         var request = new EmailSaveDraftRequest
         {
             To = "alice@example.com",
-            TextBody = "Danke schön",
+            TextBody = "Danke schön — Grüße",
             QuoteOriginal = true,
             ReplyToMessageId = "9"
         };
@@ -263,13 +321,24 @@ public class MailSaveDraftTests
         var mime = await MailKitEmailService.BuildDraftMimeAsync(
             request, "mattanja@kern.services", original, CancellationToken.None);
 
-        Assert.Contains("Danke schön", mime.TextBody, StringComparison.Ordinal);
-        Assert.Contains("Schöne Grüße aus Köln", mime.TextBody, StringComparison.Ordinal);
-        // HtmlEncode may emit numeric entities; decode before asserting round-trip.
-        var htmlDecoded = System.Net.WebUtility.HtmlDecode(mime.HtmlBody);
-        Assert.Contains("Danke schön", htmlDecoded, StringComparison.Ordinal);
+        // Real MIME round-trip: write → parse → charset + content survive.
+        using var stream = new MemoryStream();
+        await mime.WriteToAsync(stream);
+        stream.Position = 0;
+        var parsed = await MimeMessage.LoadAsync(stream);
+
+        Assert.Equal("Re: Größe", parsed.Subject);
+        Assert.Contains("Grüße", parsed.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Schöne Grüße aus Köln", parsed.TextBody, StringComparison.Ordinal);
+
+        var textPart = parsed.BodyParts.OfType<TextPart>().First(p => p.IsPlain);
+        var htmlPart = parsed.BodyParts.OfType<TextPart>().First(p => p.IsHtml);
+        Assert.Contains("utf-8", textPart.ContentType.Charset ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("utf-8", htmlPart.ContentType.Charset ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var htmlDecoded = System.Net.WebUtility.HtmlDecode(parsed.HtmlBody);
+        Assert.Contains("Grüße", htmlDecoded, StringComparison.Ordinal);
         Assert.Contains("Schöne Grüße aus Köln", htmlDecoded, StringComparison.Ordinal);
-        Assert.Equal("Re: Größe", mime.Subject);
     }
 
     [Fact]

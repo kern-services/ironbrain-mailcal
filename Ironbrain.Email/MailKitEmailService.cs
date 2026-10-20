@@ -1322,9 +1322,50 @@ public sealed class MailKitEmailService(
         return "<div>" + encoded + "</div>";
     }
 
+    private static readonly TimeSpan HtmlRegexTimeout = TimeSpan.FromSeconds(1);
+
+    private static readonly Regex BodyInnerRegex = new(
+        @"<body\b[^>]*>(.*)</body>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant
+        | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex DoctypeRegex = new(
+        @"<!DOCTYPE[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex HtmlTagRegex = new(
+        @"</?html\b[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex HeadBlockRegex = new(
+        @"<head\b[^>]*>.*?</head>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant
+        | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex BodyTagRegex = new(
+        @"</?body\b[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex StyleBlockRegex = new(
+        @"<style\b[^>]*>.*?</style>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant
+        | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
+    private static readonly Regex VoidChromeRegex = new(
+        @"<(meta|base|link)\b[^>]*/?>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled
+        | RegexOptions.NonBacktracking,
+        HtmlRegexTimeout);
+
     /// <summary>
     /// Returns the original message's plain text, converting HTML-only bodies via MimeKit
-    /// <see cref="TextConverter"/> so text quotes are not empty.
+    /// <see cref="HtmlTokenizer"/> so text quotes are not empty.
     /// </summary>
     internal static string ResolveOriginalPlainText(MimeMessage original)
     {
@@ -1337,24 +1378,46 @@ public sealed class MailKitEmailService(
 
     /// <summary>
     /// Convert HTML to plain text via MimeKit <see cref="HtmlTokenizer"/> (MimeKit 4.x has no
-    /// dedicated HtmlToText converter class).
+    /// dedicated HtmlToText converter class). Skips text inside style/script/title/head.
     /// </summary>
     internal static string HtmlToPlainText(string html)
     {
         using var reader = new StringReader(html);
         var tokenizer = new HtmlTokenizer(reader) { DecodeCharacterReferences = true };
         var sb = new System.Text.StringBuilder();
+        var skipDepth = 0;
         while (tokenizer.ReadNextToken(out var token))
         {
+            if (token is HtmlTagToken skipTag
+                && skipTag.Id is HtmlTagId.Style or HtmlTagId.Script or HtmlTagId.Title or HtmlTagId.Head)
+            {
+                if (skipTag.IsEndTag)
+                {
+                    if (skipDepth > 0)
+                        skipDepth--;
+                }
+                else if (!skipTag.IsEmptyElement)
+                {
+                    skipDepth++;
+                }
+
+                continue;
+            }
+
+            if (skipDepth > 0)
+                continue;
+
             switch (token)
             {
                 case HtmlDataToken data:
                     sb.Append(data.Data);
                     break;
                 case HtmlTagToken { Id: HtmlTagId.Br }:
+                case HtmlTagToken { Id: HtmlTagId.HR }:
                     sb.AppendLine();
                     break;
                 case HtmlTagToken { IsEndTag: true, Id: HtmlTagId.P or HtmlTagId.Div
+                    or HtmlTagId.LI or HtmlTagId.TR or HtmlTagId.BlockQuote
                     or HtmlTagId.H1 or HtmlTagId.H2 or HtmlTagId.H3
                     or HtmlTagId.H4 or HtmlTagId.H5 or HtmlTagId.H6 }:
                     sb.AppendLine();
@@ -1367,34 +1430,37 @@ public sealed class MailKitEmailService(
 
     /// <summary>
     /// Prefer <c>&lt;body&gt;</c> inner HTML; otherwise strip doctype / html / head wrappers
-    /// so a full document is never pasted inside a blockquote.
+    /// so a full document is never pasted inside a blockquote. Also strips meta/base/link/style
+    /// chrome that may appear inside the body.
     /// </summary>
     internal static string ExtractHtmlBodyInner(string html)
     {
         if (string.IsNullOrWhiteSpace(html))
             return string.Empty;
 
-        var bodyMatch = Regex.Match(
-            html,
-            @"<body\b[^>]*>(.*)</body>",
-            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        string inner;
+        var bodyMatch = BodyInnerRegex.Match(html);
         if (bodyMatch.Success)
-            return bodyMatch.Groups[1].Value.Trim();
+        {
+            inner = bodyMatch.Groups[1].Value;
+        }
+        else
+        {
+            var cleaned = DoctypeRegex.Replace(html, string.Empty);
+            cleaned = HtmlTagRegex.Replace(cleaned, string.Empty);
+            cleaned = HeadBlockRegex.Replace(cleaned, string.Empty);
+            cleaned = BodyTagRegex.Replace(cleaned, string.Empty);
+            inner = cleaned;
+        }
 
-        var cleaned = Regex.Replace(
-            html, @"<!DOCTYPE[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        cleaned = Regex.Replace(
-            cleaned, @"</?html\b[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        cleaned = Regex.Replace(
-            cleaned,
-            @"<head\b[^>]*>.*?</head>",
-            string.Empty,
-            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
-        cleaned = Regex.Replace(
-            cleaned, @"</?body\b[^>]*>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        cleaned = Regex.Replace(
-            cleaned, @"<meta\b[^>]*/?>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return cleaned.Trim();
+        return StripBodyChrome(inner).Trim();
+    }
+
+    /// <summary>Remove meta/base/link/style elements that may appear inside body content.</summary>
+    internal static string StripBodyChrome(string html)
+    {
+        var cleaned = StyleBlockRegex.Replace(html, string.Empty);
+        return VoidChromeRegex.Replace(cleaned, string.Empty);
     }
 
     internal static string FormatAddressList(InternetAddressList? list)
