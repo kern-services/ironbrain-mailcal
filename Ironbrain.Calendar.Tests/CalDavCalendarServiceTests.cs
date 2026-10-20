@@ -579,6 +579,40 @@ public class CalDavCalendarServiceTests
     }
 
     [Fact]
+    public void ResolveOccurrenceEndUtc_UsesStartPlusMasterDuration_NotAbsoluteMasterEnd()
+    {
+        // Master DTEND is 2026-09-22T18:15Z — absolute end is before a later occurrence start,
+        // so using master.End as an absolute timestamp would yield End == Start (zero duration).
+        var ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:dur-math@ironbrain
+            DTSTART:20260922T171500Z
+            DTEND:20260922T181500Z
+            RRULE:FREQ=WEEKLY;COUNT=8
+            SUMMARY:Series
+            END:VEVENT
+            END:VCALENDAR
+            """;
+        var calendar = Ical.Net.Calendar.Load(ics);
+        var master = Assert.IsType<Ical.Net.CalendarComponents.CalendarEvent>(Assert.Single(calendar!.Events));
+        var masterAbsoluteEnd = master.End!.AsUtc;
+        Assert.Equal(new DateTime(2026, 9, 22, 18, 15, 0, DateTimeKind.Utc), masterAbsoluteEnd);
+
+        var search = new Ical.Net.DataTypes.CalDateTime(new DateTime(2026, 10, 19, 0, 0, 0, DateTimeKind.Utc));
+        var occ = master.GetOccurrences(search, null)
+            .First(o => o.Period?.StartTime?.AsUtc.Date == new DateTime(2026, 10, 20));
+        var startUtc = occ.Period!.StartTime!.AsUtc;
+        Assert.True(masterAbsoluteEnd < startUtc, "precondition: absolute master DTEND before occurrence");
+
+        var endUtc = CalDavCalendarService.ResolveOccurrenceEndUtc(occ, master, startUtc);
+        Assert.Equal(startUtc.AddHours(1), endUtc);
+        Assert.NotEqual(startUtc, endUtc);
+        Assert.NotEqual(masterAbsoluteEnd, endUtc);
+    }
+
+    [Fact]
     public async Task List_RecurringOccurrence_EndIsStartPlusSeriesDuration()
     {
         // Repro: Josh Training style — TZID master; Ical.Net leaves Period.EndTime null and

@@ -533,11 +533,12 @@ public sealed partial class CalDavCalendarService(
     }
 
     /// <summary>
-    /// End of an expanded occurrence. Ical.Net often leaves <c>Period.EndTime</c> null for RRULE
-    /// expansions and only sets <c>Period.Duration</c>; the master VEVENT's DTEND is the first
-    /// instance only and must not be used as an absolute end for later occurrences.
-    /// Prefer: period end → period/event duration (or DTEND−DTSTART) → absolute event end if after start.
-    /// Override VEVENTs carry their own DTEND/DURATION and are handled the same way.
+    /// End of an expanded occurrence.
+    /// Never use the master VEVENT's absolute <c>DTEND</c> for a later instance — that collapses
+    /// duration to zero when <c>master.DTEND &lt; occurrence.Start</c>.
+    /// Prefer: occurrence period end → occurrence <c>Period.Duration</c> →
+    /// <c>occurrenceStart + (master DTEND − DTSTART)</c> / master <c>DURATION</c>
+    /// (override VEVENTs use their own DTEND/DURATION via the same duration helpers).
     /// </summary>
     internal static DateTime ResolveOccurrenceEndUtc(
         Ical.Net.DataTypes.Occurrence occ,
@@ -552,9 +553,6 @@ public sealed partial class CalDavCalendarService(
 
         if (TryGetEventDuration(evt) is { } eventDuration && eventDuration > TimeSpan.Zero)
             return startUtc.Add(eventDuration);
-
-        if (evt?.End?.AsUtc is { } evtEnd && evtEnd > startUtc)
-            return evtEnd;
 
         return startUtc;
     }
