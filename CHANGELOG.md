@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ParseOccurrences` resolves end as occurrence period end → occurrence duration →
   `occurrenceStart + (master DTEND − DTSTART)` / master `DURATION` — never the master's absolute `DTEND`.
   Fixes zero-duration Freigabe snapshots (`beforeStart` == `beforeEnd`) and `list_appointments` for later RRULE instances.
+- `list_emails` `since`/`before`: IMAP `SINCE`/`BEFORE` use the filter's UTC calendar day with no ±1 day widening
+  (`since` inclusive, `before` exclusive — matches CLI/MCP docs).
+- Bulk move/archive `MovedCount` / `Ids` report UIDPLUS-mapped source UIDs actually moved (not the requested count).
 
 ### Versions
 
