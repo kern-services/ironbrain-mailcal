@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Versions
 
-- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (on top of [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs **0.1.6**).
+- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs **0.1.6**).
 
 ## [0.1.6] — 2026-10-20
 
