@@ -1059,6 +1059,11 @@ public sealed class MailKitEmailService(
         return requested.ToList();
     }
 
+    /// <summary>
+    /// API/display form: MimeKit MessageIdList tokens (no outer <c>&lt;&gt;</c>).
+    /// Exchange <c>[id@…]</c> is returned as-is — wrapping in <c>&lt;&gt;</c> for clients
+    /// would be display-only and must not change the MIME write path.
+    /// </summary>
     internal static string? FormatInReplyTo(MimeMessage message)
     {
         if (!string.IsNullOrWhiteSpace(message.InReplyTo))
@@ -1068,6 +1073,7 @@ public sealed class MailKitEmailService(
         return string.IsNullOrWhiteSpace(raw) ? null : NormalizeMessageId(raw);
     }
 
+    /// <inheritdoc cref="FormatInReplyTo"/>
     internal static IReadOnlyList<string> FormatReferences(MimeMessage message)
     {
         if (message.References is { Count: > 0 })
@@ -1083,6 +1089,8 @@ public sealed class MailKitEmailService(
             return [];
 
         // Space-separated Message-Ids, optionally angle-bracketed.
+        // Bare Exchange [id] tokens without <> are not reliably parsed by MimeKit
+        // (MessageIdList drops them on write) — prefer the References collection above.
         return raw.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(NormalizeMessageId)
             .Where(r => r.Length > 0)
@@ -1245,6 +1253,10 @@ public sealed class MailKitEmailService(
         if (string.IsNullOrWhiteSpace(rawId))
             return;
 
+        // Exchange / NuGet Message-Ids are often "[id@microsoft.com]" (MimeKit#912).
+        // That bracketed token *is* MimeKit's MessageId — strip only outer RFC <…>,
+        // never []. MimeKit's InReplyTo/References setters then write <[id@…]>, which
+        // matches the original for threading.
         var originalId = NormalizeMessageId(rawId);
         draft.InReplyTo = originalId;
 
@@ -1253,13 +1265,16 @@ public sealed class MailKitEmailService(
         {
             foreach (var r in original.References)
             {
+                // Byte-for-byte copy of prior chain entries (including Exchange []).
+                // Do not re-normalize or case-fold: MimeKit already stores MessageIdList tokens.
                 if (!string.IsNullOrWhiteSpace(r))
-                    references.Add(NormalizeMessageId(r));
+                    references.Add(r);
             }
         }
 
-        if (!references.Exists(r => string.Equals(
-                NormalizeMessageId(r), originalId, StringComparison.OrdinalIgnoreCase)))
+        // Preserve prior tokens byte-for-byte, but treat Message-Ids as case-insensitive
+        // for the append-if-missing check so we do not emit the same ID twice.
+        if (!references.Exists(r => string.Equals(r, originalId, StringComparison.OrdinalIgnoreCase)))
             references.Add(originalId);
 
         draft.References.Clear();
@@ -1267,7 +1282,11 @@ public sealed class MailKitEmailService(
             draft.References.Add(r);
     }
 
-    /// <summary>MimeKit stores Message-Ids without angle brackets in <c>InReplyTo</c>/<c>References</c>.</summary>
+    /// <summary>
+    /// Strips a single outer RFC <c>&lt;…&gt;</c> pair for MimeKit property setters.
+    /// Does <b>not</b> strip Exchange/Microsoft <c>[…]</c> — that form is the Message-Id
+    /// (MimeKit <c>MessageId</c> equals <c>[id@…]</c>); removing it breaks threading.
+    /// </summary>
     internal static string NormalizeMessageId(string messageId)
     {
         var id = messageId.Trim();

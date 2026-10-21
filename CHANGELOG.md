@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-10-21
+
+### Changed
+
+- `ApplyReplyHeaders` (SaveDraft replies): prior `References` tokens are copied **byte-for-byte**
+  (including Exchange `[id@microsoft.com]` — MimeKit#912). `NormalizeMessageId` strips only outer
+  RFC `<…>`, never `[]`, so wire headers are written as `In-Reply-To: <[id]>` / `References: <[id]>`.
+  Append-if-missing still uses **case-insensitive** Message-Id equality so a differently-cased
+  duplicate is not added twice. `get_email` `MessageId` / Models docs unchanged (MimeKit tokens
+  without outer `<>`).
+
+### Tests
+
+- Write/reparse Exchange `<[id]>` / bare `[id]`; prior bracketed References byte-for-byte;
+  case-insensitive duplicate suppression; long References folding (≤998, order kept);
+  MimeKit drops bare `[id]` References without `<>`.
+
+### Versions
+
+- **Ironbrain.Email 0.1.8** / **Ironbrain.Calendar 0.1.8** / tools (**Cli** / **Mcp**) **0.1.8**
+  ([#16](https://github.com/kern-services/ironbrain-mailcal/pull/16)).
+
+## [0.1.7] — 2026-10-21
+
 ### Added
 
 - `EmailSendRequest` optional `Cc` / `Bcc`; `SendEmailAsync` wires them through MimeKit `AddAddresses` (same path as SaveDraft).
@@ -24,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Versions
 
 - **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**
-  (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs/tools **0.1.6** — tools must bump so nuget.org `--skip-duplicate` does not silently skip).
+  ([#13](https://github.com/kern-services/ironbrain-mailcal/pull/13)).
 
 ## [0.1.6] — 2026-10-20
 
@@ -40,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Versions
 
-- **Ironbrain.Email 0.1.6** / **Ironbrain.Calendar 0.1.6** / tools **0.1.6** (single `lib_version` for Trusted Publishing). Open [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) renumbers to **0.1.7**.
+- **Ironbrain.Email 0.1.6** / **Ironbrain.Calendar 0.1.6** / tools **0.1.6** (single `lib_version` for Trusted Publishing). [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) renumbered to **0.1.7**.
 
 ## [0.1.5] — 2026-10-20
 
