@@ -27,7 +27,7 @@ public class MailListFilterTests
     }
 
     [Fact]
-    public void BuildListSearchQuery_SinceBefore_NoDayWidening_BeforeExclusive()
+    public void BuildListSearchQuery_SinceBefore_WidensDayWindow()
     {
         var since = new DateTimeOffset(2026, 10, 20, 15, 30, 0, TimeSpan.Zero);
         var before = new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.Zero);
@@ -43,12 +43,25 @@ public class MailListFilterTests
         var beforeQ = Assert.IsType<DateSearchQuery>(binary.Right);
         Assert.Equal(SearchTerm.DeliveredAfter, sinceQ.Term);
         Assert.Equal(SearchTerm.DeliveredBefore, beforeQ.Term);
-        // SINCE inclusive of since's UTC calendar day; BEFORE exclusive of before's UTC calendar day.
-        Assert.Equal(new DateTime(2026, 10, 20), sinceQ.Date.Date);
-        Assert.Equal(new DateTime(2026, 10, 22), beforeQ.Date.Date);
-        // Must not widen (±1 day) vs docs/MCP/CLI.
-        Assert.NotEqual(new DateTime(2026, 10, 19), sinceQ.Date.Date);
-        Assert.NotEqual(new DateTime(2026, 10, 23), beforeQ.Date.Date);
+        // Coarse IMAP window: SINCE (utcDate−1), BEFORE (utcDate+2); exact bounds after fetch.
+        Assert.Equal(new DateTime(2026, 10, 19), sinceQ.Date.Date);
+        Assert.Equal(new DateTime(2026, 10, 24), beforeQ.Date.Date);
+    }
+
+    [Fact]
+    public void BuildListSearchQuery_BeforeOffset_SearchesPastUtcDay()
+    {
+        // before=2026-10-21T10:40+02:00 → UTC day 21-Oct; must not SEARCH BEFORE 21-Oct
+        // (that would drop same-day 10:27 mail before the exact-time filter runs).
+        var before = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
+        var query = MailKitEmailService.BuildListSearchQuery(new EmailListFilter { Before = before });
+
+        var beforeQ = Assert.IsType<DateSearchQuery>(query);
+        Assert.Equal(SearchTerm.DeliveredBefore, beforeQ.Term);
+        Assert.Equal(new DateTime(2026, 10, 21), before.UtcDateTime.Date);
+        Assert.True(beforeQ.Date.Date > new DateTime(2026, 10, 21),
+            "IMAP BEFORE must be after the UTC day of the bound so Oct 21 candidates are returned");
+        Assert.Equal(new DateTime(2026, 10, 23), beforeQ.Date.Date);
     }
 
     [Fact]
@@ -75,6 +88,88 @@ public class MailListFilterTests
 
         Assert.True(MailKitEmailService.PassesExactTimeFilter(earlier, since: null, before));
         Assert.False(MailKitEmailService.PassesExactTimeFilter(onBoundary, since: null, before));
+    }
+
+    [Fact]
+    public void PassesExactTimeFilter_MissingInternalDate_TreatedAsMinValue()
+    {
+        var since = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
+        var before = since;
+
+        // null INTERNALDATE → MinValue: excluded by since, kept by before-only.
+        Assert.False(MailKitEmailService.PassesExactTimeFilter(null, since, before: null));
+        Assert.True(MailKitEmailService.PassesExactTimeFilter(null, since: null, before));
+        Assert.False(MailKitEmailService.PassesExactTimeFilter(null, since, before));
+    }
+
+    [Fact]
+    public void ListTimeFilterFixture_BeforeOffset_WideSearchKeepsEarlierSameDay()
+    {
+        // IMAP coarse window must return Oct 21 candidates; exact filter keeps 10:27, drops 10:40+.
+        var filter = new EmailListFilter
+        {
+            Before = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00")
+        };
+        var query = MailKitEmailService.BuildListSearchQuery(filter);
+        var beforeQ = Assert.IsType<DateSearchQuery>(query);
+        Assert.Equal(new DateTime(2026, 10, 23), beforeQ.Date.Date);
+
+        DateTimeOffset?[] candidates =
+        [
+            DateTimeOffset.Parse("2026-10-21T10:27:00+02:00"),
+            DateTimeOffset.Parse("2026-10-21T10:40:00+02:00"),
+            DateTimeOffset.Parse("2026-10-21T11:00:00+02:00"),
+            null // missing INTERNALDATE → MinValue → kept by before-only
+        ];
+
+        var kept = MailKitEmailService.ApplyListTimeFilters(candidates, filter);
+        Assert.Equal(2, kept.Count);
+        Assert.Equal(candidates[0], kept[0]);
+        Assert.Null(kept[1]);
+    }
+
+    [Fact]
+    public void ListTimeFilterFixture_SinceUtcMidnight_KeepsPriorUtcEveningAcrossTz()
+    {
+        // Message at 20-Oct 23:30Z may be 21-Oct in +02 on the server; coarse SINCE must
+        // reach date−1 so the candidate survives SEARCH, then exact filter keeps it for
+        // before=2026-10-21T00:00Z (exclusive upper) / since unbound.
+        var filter = new EmailListFilter
+        {
+            Before = DateTimeOffset.Parse("2026-10-21T00:00:00Z")
+        };
+        var query = MailKitEmailService.BuildListSearchQuery(filter);
+        var beforeQ = Assert.IsType<DateSearchQuery>(query);
+        Assert.Equal(new DateTime(2026, 10, 23), beforeQ.Date.Date);
+
+        var priorEveningUtc = DateTimeOffset.Parse("2026-10-20T23:30:00Z");
+        var onBound = DateTimeOffset.Parse("2026-10-21T00:00:00Z");
+        var kept = MailKitEmailService.ApplyListTimeFilters([priorEveningUtc, onBound], filter);
+        Assert.Single(kept);
+        Assert.Equal(priorEveningUtc, kept[0]);
+    }
+
+    [Fact]
+    public void ListTimeFilterFixture_SinceWidened_ExactDropsEarlierSameDay()
+    {
+        var filter = new EmailListFilter
+        {
+            Since = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00")
+        };
+        var query = MailKitEmailService.BuildListSearchQuery(filter);
+        var sinceQ = Assert.IsType<DateSearchQuery>(query);
+        Assert.Equal(new DateTime(2026, 10, 20), sinceQ.Date.Date);
+
+        DateTimeOffset?[] candidates =
+        [
+            DateTimeOffset.Parse("2026-10-21T10:27:00+02:00"),
+            DateTimeOffset.Parse("2026-10-21T10:40:00+02:00"),
+            null
+        ];
+
+        var kept = MailKitEmailService.ApplyListTimeFilters(candidates, filter);
+        Assert.Single(kept);
+        Assert.Equal(candidates[1], kept[0]);
     }
 
     [Fact]
