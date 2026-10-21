@@ -33,13 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Versions
 
-<<<<<<< HEAD
-- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**
-  (rebased on main after [#15](https://github.com/kern-services/ironbrain-mailcal/pull/15) libs/tools **0.1.6** — tools must bump so nuget.org `--skip-duplicate` does not silently skip).
-=======
-- **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** (same as [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13); this PR stacks on #13 — **no 0.1.8 bump**).
-- Merge order: **#13 first**, then this tip.
->>>>>>> b78de6c (test(email): lock SaveDraft Exchange [] Message-Id threading)
+- Same as [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13) / main after merge: **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**.
+- This PR adds tests + clarification only — **no version bump**. Merge **#13 first**, then rebase this onto main.
 
 ## [0.1.6] — 2026-10-20
 

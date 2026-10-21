@@ -1265,15 +1265,14 @@ public sealed class MailKitEmailService(
         {
             foreach (var r in original.References)
             {
-                // Preserve prior chain entries verbatim (including Exchange []).
-                // Do not re-normalize: MimeKit already stores the MessageIdList form.
+                // Byte-for-byte copy of prior chain entries (including Exchange []).
+                // Do not re-normalize or case-fold: MimeKit already stores MessageIdList tokens.
                 if (!string.IsNullOrWhiteSpace(r))
                     references.Add(r);
             }
         }
 
-        if (!references.Exists(r => string.Equals(
-                r, originalId, StringComparison.OrdinalIgnoreCase)))
+        if (!references.Exists(r => string.Equals(r, originalId, StringComparison.Ordinal)))
             references.Add(originalId);
 
         draft.References.Clear();

@@ -110,7 +110,7 @@ public class MailSaveDraftTests
     }
 
     [Fact]
-    public void ApplyReplyHeaders_PreservesPriorBracketedReferencesVerbatim()
+    public void ApplyReplyHeaders_PreservesPriorBracketedReferencesByteForByte()
     {
         const string root = "[root-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]";
         const string child = "[child-JFZGS42DN5WW25LONFRWC5DJN5XFA3DBORTG64TNFVIHE33EFVBEYMSQPRHHKR3FOR6EK3LBNFWFA5LCNRUXG2DFOJ6EK6DPKNWXI4A=@microsoft.com]";
@@ -118,7 +118,8 @@ public class MailSaveDraftTests
         var original = LoadMimeWithHeaders(
             $"Message-ID: {child}\r\nReferences: <{root}>\r\n",
             body: "original");
-        Assert.Equal(new[] { root }, original.References.ToArray());
+        var priorExact = original.References.ToArray();
+        Assert.Equal(new[] { root }, priorExact);
 
         var draft = new MimeMessage();
         draft.From.Add(MailboxAddress.Parse("a@example.com"));
@@ -126,8 +127,11 @@ public class MailSaveDraftTests
         MailKitEmailService.ApplyReplyHeaders(draft, original);
         draft.Body = new TextPart("plain") { Text = "reply" };
 
+        // First N-1 entries must match the source References tokens exactly (byte-for-byte).
+        Assert.Equal(priorExact, draft.References.Take(priorExact.Length).ToArray());
         Assert.Equal(new[] { root, child }, draft.References.ToArray());
         var parsed = WriteAndReload(draft);
+        Assert.Equal(priorExact, parsed.References.Take(priorExact.Length).ToArray());
         Assert.Equal(new[] { root, child }, parsed.References.ToArray());
         Assert.Equal(child, parsed.InReplyTo);
     }
