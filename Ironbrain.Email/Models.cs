@@ -19,18 +19,16 @@ public sealed class EmailListFilter
     public bool? Unread { get; init; }
 
     /// <summary>
-    /// Inclusive lower bound on INTERNALDATE / delivery date.
+    /// Inclusive lower bound on delivery date (INTERNALDATE, else Envelope.Date).
     /// IMAP SEARCH is widened to <c>SINCE (utcDate − 1)</c>; exact time is applied after fetch.
-    /// Messages with missing INTERNALDATE are treated as <see cref="DateTimeOffset.MinValue"/>
-    /// and therefore excluded by any <see cref="Since"/> bound.
+    /// Messages with neither INTERNALDATE nor Envelope.Date do not match when this bound is set.
     /// </summary>
     public DateTimeOffset? Since { get; init; }
 
     /// <summary>
-    /// Exclusive upper bound on INTERNALDATE / delivery date.
+    /// Exclusive upper bound on delivery date (INTERNALDATE, else Envelope.Date).
     /// IMAP SEARCH is widened to <c>BEFORE (utcDate + 2)</c>; exact time is applied after fetch.
-    /// Messages with missing INTERNALDATE are treated as <see cref="DateTimeOffset.MinValue"/>
-    /// and therefore included by any practical <see cref="Before"/> bound.
+    /// Messages with neither INTERNALDATE nor Envelope.Date do not match when this bound is set.
     /// </summary>
     public DateTimeOffset? Before { get; init; }
 
