@@ -96,6 +96,10 @@ public sealed class EmailBulkMoveResult
 public sealed class EmailSendRequest
 {
     public required string To { get; set; }
+    /// <summary>Optional Cc (comma- or semicolon-separated).</summary>
+    public string? Cc { get; set; }
+    /// <summary>Optional Bcc (comma- or semicolon-separated).</summary>
+    public string? Bcc { get; set; }
     public required string Subject { get; set; }
     public string? TextBody { get; set; }
     public string? HtmlBody { get; set; }

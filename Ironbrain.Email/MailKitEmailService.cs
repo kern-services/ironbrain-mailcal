@@ -187,11 +187,13 @@ public sealed class MailKitEmailService(
         else if (filter.Unread == false)
             And(SearchQuery.Seen);
 
+        // IMAP SINCE = inclusive of that calendar day; BEFORE = exclusive of that calendar day.
+        // Do not widen by ±1 day — docs/MCP/CLI advertise inclusive since / exclusive before.
         if (filter.Since is { } since)
-            And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date.AddDays(-1)));
+            And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date));
 
         if (filter.Before is { } before)
-            And(SearchQuery.DeliveredBefore(before.UtcDateTime.Date.AddDays(1)));
+            And(SearchQuery.DeliveredBefore(before.UtcDateTime.Date));
 
         if (!string.IsNullOrWhiteSpace(filter.FromContains))
             And(SearchQuery.FromContains(filter.FromContains.Trim()));
@@ -350,7 +352,9 @@ public sealed class MailKitEmailService(
 
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(smtp.FromName, smtp.FromAddress));
-        message.To.Add(MailboxAddress.Parse(request.To));
+        AddAddresses(message.To, request.To);
+        AddAddresses(message.Cc, request.Cc);
+        AddAddresses(message.Bcc, request.Bcc);
         message.Subject = request.Subject;
         message.Body = new BodyBuilder
         {
@@ -498,21 +502,22 @@ public sealed class MailKitEmailService(
 
         var destination = await GetOrCreateMailboxAsync(client, destName, timeoutCts.Token).ConfigureAwait(false);
         var method = client.Capabilities.HasFlag(ImapCapabilities.Move) ? "MOVE" : "COPY+DELETE";
-        await source.MoveToAsync(uids, destination, timeoutCts.Token).ConfigureAwait(false);
+        var uidMap = await source.MoveToAsync(uids, destination, timeoutCts.Token).ConfigureAwait(false);
+        var moved = ResolveMovedSourceUids(uidMap, uids);
 
         logger.LogInformation(
             "Moved {Count} message(s) from {FromMailbox} to {ToMailbox} via {Method}",
-            uids.Count, sourceName, destination.FullName, method);
+            moved.Count, sourceName, destination.FullName, method);
 
         await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
 
         return new EmailBulkMoveResult
         {
-            Ids = uids.Select(u => u.Id.ToString()).ToList(),
+            Ids = moved.Select(u => u.Id.ToString()).ToList(),
             FromMailbox = sourceName,
             ToMailbox = destination.FullName,
             Method = method,
-            MovedCount = uids.Count
+            MovedCount = moved.Count
         };
     }
 
@@ -608,19 +613,21 @@ public sealed class MailKitEmailService(
         {
             var destination = await GetOrCreateMailboxAsync(client, destPattern, timeoutCts.Token)
                 .ConfigureAwait(false);
-            await source.MoveToAsync(groupUids, destination, timeoutCts.Token).ConfigureAwait(false);
+            var uidMap = await source.MoveToAsync(groupUids, destination, timeoutCts.Token)
+                .ConfigureAwait(false);
+            var moved = ResolveMovedSourceUids(uidMap, groupUids);
 
             logger.LogInformation(
                 "Archived {Count} message(s) from {FromMailbox} to {ToMailbox} via {Method}",
-                groupUids.Count, sourceName, destination.FullName, method);
+                moved.Count, sourceName, destination.FullName, method);
 
             results.Add(new EmailBulkMoveResult
             {
-                Ids = groupUids.Select(u => u.Id.ToString()).ToList(),
+                Ids = moved.Select(u => u.Id.ToString()).ToList(),
                 FromMailbox = sourceName,
                 ToMailbox = destination.FullName,
                 Method = method,
-                MovedCount = groupUids.Count
+                MovedCount = moved.Count
             });
         }
 
@@ -1037,6 +1044,19 @@ public sealed class MailKitEmailService(
             throw new ArgumentException("At least one IMAP UID is required.", nameof(ids));
 
         return result;
+    }
+
+    /// <summary>
+    /// Source UIDs actually moved per UIDPLUS mapping. When the server returns an empty map
+    /// (no UIDPLUS), fall back to the requested set — we cannot observe partial success.
+    /// </summary>
+    internal static IReadOnlyList<UniqueId> ResolveMovedSourceUids(
+        UniqueIdMap? uidMap,
+        IList<UniqueId> requested)
+    {
+        if (uidMap is { Count: > 0 } && uidMap.Source is { Count: > 0 })
+            return uidMap.Source.ToList();
+        return requested.ToList();
     }
 
     internal static string? FormatInReplyTo(MimeMessage message)
@@ -1470,7 +1490,11 @@ public sealed class MailKitEmailService(
         return string.Join(", ", list.Select(a => a.ToString()));
     }
 
-    private static void AddAddresses(InternetAddressList target, string? raw)
+    /// <summary>
+    /// Parses comma/semicolon-separated address lists with MimeKit (same path as SMTP send).
+    /// Exposed to tests via InternalsVisibleTo.
+    /// </summary>
+    internal static void AddAddresses(InternetAddressList target, string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return;
@@ -1482,6 +1506,24 @@ public sealed class MailKitEmailService(
             else
                 throw new ArgumentException($"Invalid email address '{part}'.", nameof(raw));
         }
+    }
+
+    /// <summary>Builds the outbound MIME for unit tests (From + To/Cc/Bcc + subject/body).</summary>
+    internal static MimeMessage BuildSendMime(EmailSendRequest request, string fromAddress, string? fromName = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var message = new MimeMessage();
+        message.From.Add(new MailboxAddress(fromName ?? fromAddress, fromAddress));
+        AddAddresses(message.To, request.To);
+        AddAddresses(message.Cc, request.Cc);
+        AddAddresses(message.Bcc, request.Bcc);
+        message.Subject = request.Subject;
+        message.Body = new BodyBuilder
+        {
+            TextBody = request.TextBody,
+            HtmlBody = request.HtmlBody
+        }.ToMessageBody();
+        return message;
     }
 
     private void PreferSafeSasl(IMailService client)
