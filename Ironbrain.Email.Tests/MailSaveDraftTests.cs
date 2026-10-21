@@ -137,6 +137,33 @@ public class MailSaveDraftTests
     }
 
     [Fact]
+    public void ApplyReplyHeaders_DoesNotDuplicateMessageId_CaseInsensitive()
+    {
+        // Prior References keeps mixed case; Message-ID differs only by case.
+        // Duplicate check must be OrdinalIgnoreCase so we do not append a second token,
+        // while the prior entry stays byte-for-byte (original casing).
+        const string priorCased = "AbC@example.com";
+        const string messageIdLower = "abc@example.com";
+
+        var original = LoadMimeWithHeaders(
+            $"Message-ID: <{messageIdLower}>\r\nReferences: <{priorCased}>\r\n",
+            body: "original");
+        Assert.Equal(new[] { priorCased }, original.References.ToArray());
+
+        var draft = new MimeMessage();
+        draft.From.Add(MailboxAddress.Parse("a@example.com"));
+        draft.To.Add(MailboxAddress.Parse("b@example.com"));
+        MailKitEmailService.ApplyReplyHeaders(draft, original);
+        draft.Body = new TextPart("plain") { Text = "reply" };
+
+        Assert.Equal(messageIdLower, draft.InReplyTo);
+        Assert.Equal(new[] { priorCased }, draft.References.ToArray());
+        var parsed = WriteAndReload(draft);
+        Assert.Equal(new[] { priorCased }, parsed.References.ToArray());
+        Assert.Equal(messageIdLower, parsed.InReplyTo);
+    }
+
+    [Fact]
     public void ApplyReplyHeaders_LongReferences_FoldsUnder998_KeepsAllIdsInOrder()
     {
         var prior = new List<string>();

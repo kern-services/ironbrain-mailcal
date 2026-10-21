@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-10-21
+
+### Changed
+
+- `ApplyReplyHeaders` (SaveDraft replies): prior `References` tokens are copied **byte-for-byte**
+  (including Exchange `[id@microsoft.com]` — MimeKit#912). `NormalizeMessageId` strips only outer
+  RFC `<…>`, never `[]`, so wire headers are written as `In-Reply-To: <[id]>` / `References: <[id]>`.
+  Append-if-missing still uses **case-insensitive** Message-Id equality so a differently-cased
+  duplicate is not added twice. `get_email` `MessageId` / Models docs unchanged (MimeKit tokens
+  without outer `<>`).
+
+### Tests
+
+- Write/reparse Exchange `<[id]>` / bare `[id]`; prior bracketed References byte-for-byte;
+  case-insensitive duplicate suppression; long References folding (≤998, order kept);
+  MimeKit drops bare `[id]` References without `<>`.
+
+### Versions
+
+- **Ironbrain.Email 0.1.8** / **Ironbrain.Calendar 0.1.8** / tools (**Cli** / **Mcp**) **0.1.8**
+  ([#16](https://github.com/kern-services/ironbrain-mailcal/pull/16)).
+
+## [0.1.7] — 2026-10-21
+
 ### Added
 
 - `EmailSendRequest` optional `Cc` / `Bcc`; `SendEmailAsync` wires them through MimeKit `AddAddresses` (same path as SaveDraft).
@@ -21,22 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`since` inclusive, `before` exclusive — matches CLI/MCP docs).
 - Bulk move/archive `MovedCount` / `Ids` report UIDPLUS-mapped source UIDs actually moved (not the requested count).
 
-### Clarified (SaveDraft reply threading — no lib bump)
-
-- Exchange / NuGet `Message-ID: [id@microsoft.com]` **is** the Message-Id (MimeKit `MessageId` == `[id]`).
-  `NormalizeMessageId` strips only outer RFC `<…>`; **never** `[]`. SaveDraft writes `In-Reply-To` /
-  `References` as `<[id]>` so threading matches the original (0.1.6 behaviour). Prior References
-  entries are copied **byte-for-byte** (brackets included). `get_email` still returns MimeKit tokens
-  without outer `<>` — seeing `[id]` in JSON is expected; wrapping in `<>` would be display-only.
-- Regression tests: write/reparse Exchange `<[id]>` / bare `[id]`; prior bracketed References
-  byte-for-byte; long References folding (≤998, order kept); MimeKit drops bare `[id]` References
-  without `<>`.
-
 ### Versions
 
 - **Ironbrain.Email 0.1.7** / **Ironbrain.Calendar 0.1.7** / tools (**Cli** / **Mcp**) **0.1.7**
-  (main after [#13](https://github.com/kern-services/ironbrain-mailcal/pull/13)).
-- This PR ([#16](https://github.com/kern-services/ironbrain-mailcal/pull/16)): tests + clarification only — **no version bump** (no 0.1.8).
+  ([#13](https://github.com/kern-services/ironbrain-mailcal/pull/13)).
 
 ## [0.1.6] — 2026-10-20
 

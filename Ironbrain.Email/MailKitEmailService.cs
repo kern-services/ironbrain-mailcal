@@ -1272,7 +1272,9 @@ public sealed class MailKitEmailService(
             }
         }
 
-        if (!references.Exists(r => string.Equals(r, originalId, StringComparison.Ordinal)))
+        // Preserve prior tokens byte-for-byte, but treat Message-Ids as case-insensitive
+        // for the append-if-missing check so we do not emit the same ID twice.
+        if (!references.Exists(r => string.Equals(r, originalId, StringComparison.OrdinalIgnoreCase)))
             references.Add(originalId);
 
         draft.References.Clear();
