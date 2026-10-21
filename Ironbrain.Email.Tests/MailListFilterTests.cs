@@ -52,6 +52,32 @@ public class MailListFilterTests
     }
 
     [Fact]
+    public void PassesExactTimeFilter_Iso8601Since_ExcludesEarlierSameDay()
+    {
+        // IMAP day search would still return 10:27; exact filter must drop it.
+        var since = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
+        var earlier = DateTimeOffset.Parse("2026-10-21T10:27:00+02:00");
+        var onBoundary = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
+        var later = DateTimeOffset.Parse("2026-10-21T11:00:00+02:00");
+
+        Assert.False(MailKitEmailService.PassesExactTimeFilter(earlier, since, before: null));
+        Assert.True(MailKitEmailService.PassesExactTimeFilter(onBoundary, since, before: null));
+        Assert.True(MailKitEmailService.PassesExactTimeFilter(later, since, before: null));
+        Assert.True(MailKitEmailService.NeedsExactTimeFilter(new EmailListFilter { Since = since }));
+    }
+
+    [Fact]
+    public void PassesExactTimeFilter_BeforeExclusive_DropsOnAndAfterBound()
+    {
+        var before = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
+        var earlier = DateTimeOffset.Parse("2026-10-21T10:27:00+02:00");
+        var onBoundary = before;
+
+        Assert.True(MailKitEmailService.PassesExactTimeFilter(earlier, since: null, before));
+        Assert.False(MailKitEmailService.PassesExactTimeFilter(onBoundary, since: null, before));
+    }
+
+    [Fact]
     public void ParseUids_DedupesAndPreservesOrder()
     {
         var uids = MailKitEmailService.ParseUids(["3", "1", "3", "2"]);

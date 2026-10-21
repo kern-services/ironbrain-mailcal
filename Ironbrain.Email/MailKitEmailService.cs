@@ -108,23 +108,45 @@ public sealed class MailKitEmailService(
         {
             var query = BuildListSearchQuery(filter);
             var uids = await inbox.SearchAsync(query, timeoutCts.Token).ConfigureAwait(false);
-            // Newest-first: higher UIDs are typically newer; fall back to InternalDate after fetch.
-            var ordered = uids.OrderByDescending(u => u.Id).ToList();
-            totalCount = ordered.Count;
-            if (totalCount == 0 || clampedOffset >= totalCount)
+
+            // IMAP SINCE/BEFORE are calendar-day only. When since/before carry a time-of-day
+            // (ISO-8601), refine matches by INTERNALDATE after fetch so e.g.
+            // since=2026-10-21T10:40+02:00 does not return 10:27 messages.
+            if (NeedsExactTimeFilter(filter) && uids.Count > 0)
             {
-                items = [];
-            }
-            else
-            {
-                var pageUids = ordered.Skip(clampedOffset).Take(clampedLimit).ToList();
-                var summaries = await inbox.FetchAsync(pageUids, fetchRequest, timeoutCts.Token)
+                var summaries = await inbox.FetchAsync(uids, fetchRequest, timeoutCts.Token)
                     .ConfigureAwait(false);
-                items = summaries
+                var filtered = summaries
+                    .Where(s => PassesExactTimeFilter(s.InternalDate, filter.Since, filter.Before))
                     .OrderByDescending(s => s.InternalDate)
                     .ThenByDescending(s => s.UniqueId.Id)
                     .Select(ToEmailSummary)
                     .ToList();
+                totalCount = filtered.Count;
+                items = clampedOffset >= totalCount
+                    ? []
+                    : filtered.Skip(clampedOffset).Take(clampedLimit).ToList();
+            }
+            else
+            {
+                // Newest-first: higher UIDs are typically newer; fall back to InternalDate after fetch.
+                var ordered = uids.OrderByDescending(u => u.Id).ToList();
+                totalCount = ordered.Count;
+                if (totalCount == 0 || clampedOffset >= totalCount)
+                {
+                    items = [];
+                }
+                else
+                {
+                    var pageUids = ordered.Skip(clampedOffset).Take(clampedLimit).ToList();
+                    var summaries = await inbox.FetchAsync(pageUids, fetchRequest, timeoutCts.Token)
+                        .ConfigureAwait(false);
+                    items = summaries
+                        .OrderByDescending(s => s.InternalDate)
+                        .ThenByDescending(s => s.UniqueId.Id)
+                        .Select(ToEmailSummary)
+                        .ToList();
+                }
             }
         }
         else
@@ -189,6 +211,7 @@ public sealed class MailKitEmailService(
 
         // IMAP SINCE = inclusive of that calendar day; BEFORE = exclusive of that calendar day.
         // Do not widen by ±1 day — docs/MCP/CLI advertise inclusive since / exclusive before.
+        // Exact time-of-day is applied after fetch via <see cref="PassesExactTimeFilter"/>.
         if (filter.Since is { } since)
             And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date));
 
@@ -202,6 +225,27 @@ public sealed class MailKitEmailService(
             And(SearchQuery.SubjectContains(filter.SubjectContains.Trim()));
 
         return query ?? SearchQuery.All;
+    }
+
+    /// <summary>True when since/before are set — IMAP day search must be refined by INTERNALDATE.</summary>
+    internal static bool NeedsExactTimeFilter(EmailListFilter filter) =>
+        filter.Since.HasValue || filter.Before.HasValue;
+
+    /// <summary>
+    /// Inclusive <paramref name="since"/> / exclusive <paramref name="before"/> on message date
+    /// (typically IMAP INTERNALDATE). Exposed for unit tests.
+    /// </summary>
+    internal static bool PassesExactTimeFilter(
+        DateTimeOffset? messageDate,
+        DateTimeOffset? since,
+        DateTimeOffset? before)
+    {
+        var date = messageDate ?? DateTimeOffset.MinValue;
+        if (since is { } s && date < s)
+            return false;
+        if (before is { } b && date >= b)
+            return false;
+        return true;
     }
 
     public async Task<EmailContent> GetEmailAsync(
