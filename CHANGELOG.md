@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-10-21
+
+### Fixed
+
+- `list_emails` exact since/before filter: messages with neither INTERNALDATE nor Envelope.Date no longer
+  match when any bound is set (0.1.10 treated missing INTERNALDATE as `DateTimeOffset.MinValue`, which
+  incorrectly passed every `before` filter). Prefer Envelope.Date when INTERNALDATE is absent.
+
+### Docs
+
+- Exact since/before filtering uses INTERNALDATE, falling back to Envelope.Date; if both are missing the
+  message does **not** match any `since` or `before` bound (`EmailListFilter` / `PassesExactTimeFilter`).
+
+### Tests
+
+- Missing date excluded for since-only, before-only, and both; Envelope.Date fallback;
+  `ListTimeFilterFixture_BeforeUtcMidnight_…` rename (was misnamed SinceUtcMidnight).
+
+### Versions
+
+- **Ironbrain.Email 0.1.11** / **Ironbrain.Calendar 0.1.11** / tools (**Cli** / **Mcp**) **0.1.11**
+
 ## [0.1.10] — 2026-10-21
 
 ### Fixed
@@ -21,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Missing INTERNALDATE is treated as `DateTimeOffset.MinValue` in the exact-time filter: excluded by any
   `since` bound, included by any practical `before` bound (`EmailListFilter` / `PassesExactTimeFilter`).
+  Superseded by **0.1.11**.
 
 ### Tests
 
@@ -30,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Versions
 
 - **Ironbrain.Email 0.1.10** / **Ironbrain.Calendar 0.1.10** / tools (**Cli** / **Mcp**) **0.1.10**
+  ([#18](https://github.com/kern-services/ironbrain-mailcal/pull/18)).
 
 ## [0.1.9] — 2026-10-21
 

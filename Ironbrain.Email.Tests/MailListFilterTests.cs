@@ -91,15 +91,28 @@ public class MailListFilterTests
     }
 
     [Fact]
-    public void PassesExactTimeFilter_MissingInternalDate_TreatedAsMinValue()
+    public void PassesExactTimeFilter_MissingDate_ExcludedWhenAnyBoundSet()
     {
         var since = DateTimeOffset.Parse("2026-10-21T10:40:00+02:00");
         var before = since;
 
-        // null INTERNALDATE → MinValue: excluded by since, kept by before-only.
+        // Unknown date must not match since-only, before-only, or both.
         Assert.False(MailKitEmailService.PassesExactTimeFilter(null, since, before: null));
-        Assert.True(MailKitEmailService.PassesExactTimeFilter(null, since: null, before));
+        Assert.False(MailKitEmailService.PassesExactTimeFilter(null, since: null, before));
         Assert.False(MailKitEmailService.PassesExactTimeFilter(null, since, before));
+        // No bounds: listing path does not call this, but null still "passes".
+        Assert.True(MailKitEmailService.PassesExactTimeFilter(null, since: null, before: null));
+    }
+
+    [Fact]
+    public void ResolveListFilterDate_FallsBackToEnvelopeDate()
+    {
+        var envelope = DateTimeOffset.Parse("2026-10-21T10:27:00+02:00");
+        Assert.Equal(envelope, MailKitEmailService.ResolveListFilterDate(null, envelope));
+        Assert.Null(MailKitEmailService.ResolveListFilterDate(null, null));
+
+        var internalDate = DateTimeOffset.Parse("2026-10-21T09:00:00+02:00");
+        Assert.Equal(internalDate, MailKitEmailService.ResolveListFilterDate(internalDate, envelope));
     }
 
     [Fact]
@@ -119,21 +132,20 @@ public class MailListFilterTests
             DateTimeOffset.Parse("2026-10-21T10:27:00+02:00"),
             DateTimeOffset.Parse("2026-10-21T10:40:00+02:00"),
             DateTimeOffset.Parse("2026-10-21T11:00:00+02:00"),
-            null // missing INTERNALDATE → MinValue → kept by before-only
+            null // no INTERNALDATE / Envelope.Date → excluded by before
         ];
 
         var kept = MailKitEmailService.ApplyListTimeFilters(candidates, filter);
-        Assert.Equal(2, kept.Count);
+        Assert.Single(kept);
         Assert.Equal(candidates[0], kept[0]);
-        Assert.Null(kept[1]);
     }
 
     [Fact]
-    public void ListTimeFilterFixture_SinceUtcMidnight_KeepsPriorUtcEveningAcrossTz()
+    public void ListTimeFilterFixture_BeforeUtcMidnight_KeepsPriorUtcEveningAcrossTz()
     {
-        // Message at 20-Oct 23:30Z may be 21-Oct in +02 on the server; coarse SINCE must
-        // reach date−1 so the candidate survives SEARCH, then exact filter keeps it for
-        // before=2026-10-21T00:00Z (exclusive upper) / since unbound.
+        // Message at 20-Oct 23:30Z may be 21-Oct in +02 on the server; coarse BEFORE must
+        // reach utcDate+2 so the candidate survives SEARCH, then exact filter keeps it for
+        // before=2026-10-21T00:00Z (exclusive upper).
         var filter = new EmailListFilter
         {
             Before = DateTimeOffset.Parse("2026-10-21T00:00:00Z")
