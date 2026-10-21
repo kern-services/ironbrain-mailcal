@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-10-21
+
+### Fixed
+
+- `list_emails` / `ListInboxAsync`: coarse IMAP `SINCE`/`BEFORE` is widened to `SINCE (utcDate − 1)`
+  and `BEFORE (utcDate + 2)` so servers that compare calendar days in the message timezone (not UTC)
+  do not drop same-day or near-boundary candidates before the exact INTERNALDATE filter runs.
+  Example: `before=2026-10-21T10:40+02:00` must not SEARCH `BEFORE 21-Oct` (that dropped 10:27 mail).
+  Exact inclusive `since` / exclusive `before` still apply after fetch; pagination uses the refined set.
+
+### Docs
+
+- Missing INTERNALDATE is treated as `DateTimeOffset.MinValue` in the exact-time filter: excluded by any
+  `since` bound, included by any practical `before` bound (`EmailListFilter` / `PassesExactTimeFilter`).
+
+### Tests
+
+- Search-window widening (`SINCE date−1` / `BEFORE date+2`); `before=…T10:40+02:00` searches past 21-Oct;
+  fixture pipelines combining widened SEARCH + exact-time filter; missing INTERNALDATE handling.
+
+### Versions
+
+- **Ironbrain.Email 0.1.10** / **Ironbrain.Calendar 0.1.10** / tools (**Cli** / **Mcp**) **0.1.10**
+
 ## [0.1.9] — 2026-10-21
 
 ### Fixed

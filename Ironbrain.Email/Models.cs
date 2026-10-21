@@ -20,13 +20,17 @@ public sealed class EmailListFilter
 
     /// <summary>
     /// Inclusive lower bound on INTERNALDATE / delivery date.
-    /// IMAP SEARCH uses the UTC calendar day; exact time-of-day is applied after fetch.
+    /// IMAP SEARCH is widened to <c>SINCE (utcDate − 1)</c>; exact time is applied after fetch.
+    /// Messages with missing INTERNALDATE are treated as <see cref="DateTimeOffset.MinValue"/>
+    /// and therefore excluded by any <see cref="Since"/> bound.
     /// </summary>
     public DateTimeOffset? Since { get; init; }
 
     /// <summary>
     /// Exclusive upper bound on INTERNALDATE / delivery date.
-    /// IMAP SEARCH uses the UTC calendar day; exact time-of-day is applied after fetch.
+    /// IMAP SEARCH is widened to <c>BEFORE (utcDate + 2)</c>; exact time is applied after fetch.
+    /// Messages with missing INTERNALDATE are treated as <see cref="DateTimeOffset.MinValue"/>
+    /// and therefore included by any practical <see cref="Before"/> bound.
     /// </summary>
     public DateTimeOffset? Before { get; init; }
 

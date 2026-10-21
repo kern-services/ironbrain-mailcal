@@ -109,9 +109,9 @@ public sealed class MailKitEmailService(
             var query = BuildListSearchQuery(filter);
             var uids = await inbox.SearchAsync(query, timeoutCts.Token).ConfigureAwait(false);
 
-            // IMAP SINCE/BEFORE are calendar-day only. When since/before carry a time-of-day
-            // (ISO-8601), refine matches by INTERNALDATE after fetch so e.g.
-            // since=2026-10-21T10:40+02:00 does not return 10:27 messages.
+            // IMAP SINCE/BEFORE are calendar-day only (and widened for TZ skew). Refine by
+            // INTERNALDATE after fetch so ISO-8601 since/before apply exact inclusive/exclusive
+            // bounds (e.g. since=…T10:40 excludes 10:27; before=…T10:40 keeps 10:27).
             if (NeedsExactTimeFilter(filter) && uids.Count > 0)
             {
                 var summaries = await inbox.FetchAsync(uids, fetchRequest, timeoutCts.Token)
@@ -209,14 +209,19 @@ public sealed class MailKitEmailService(
         else if (filter.Unread == false)
             And(SearchQuery.Seen);
 
-        // IMAP SINCE = inclusive of that calendar day; BEFORE = exclusive of that calendar day.
-        // Do not widen by ±1 day — docs/MCP/CLI advertise inclusive since / exclusive before.
-        // Exact time-of-day is applied after fetch via <see cref="PassesExactTimeFilter"/>.
+        // IMAP SINCE/BEFORE are calendar-day only and servers often compare in the message's
+        // timezone (not UTC). Coarse SEARCH is intentionally widened so candidates are not
+        // dropped before the exact INTERNALDATE filter:
+        //   SINCE  (utcDate − 1)  — cushion when the server is behind UTC
+        //   BEFORE (utcDate + 2)  — include the UTC day of the bound (BEFORE is exclusive)
+        //                           plus one day for servers ahead of UTC
+        // Exact inclusive-since / exclusive-before bounds are applied after fetch via
+        // <see cref="PassesExactTimeFilter"/>.
         if (filter.Since is { } since)
-            And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date));
+            And(SearchQuery.DeliveredAfter(since.UtcDateTime.Date.AddDays(-1)));
 
         if (filter.Before is { } before)
-            And(SearchQuery.DeliveredBefore(before.UtcDateTime.Date));
+            And(SearchQuery.DeliveredBefore(before.UtcDateTime.Date.AddDays(2)));
 
         if (!string.IsNullOrWhiteSpace(filter.FromContains))
             And(SearchQuery.FromContains(filter.FromContains.Trim()));
@@ -234,6 +239,8 @@ public sealed class MailKitEmailService(
     /// <summary>
     /// Inclusive <paramref name="since"/> / exclusive <paramref name="before"/> on message date
     /// (typically IMAP INTERNALDATE). Exposed for unit tests.
+    /// Missing INTERNALDATE (<see langword="null"/>) is treated as <see cref="DateTimeOffset.MinValue"/>:
+    /// it fails any <paramref name="since"/> bound and passes any practical <paramref name="before"/> bound.
     /// </summary>
     internal static bool PassesExactTimeFilter(
         DateTimeOffset? messageDate,
@@ -246,6 +253,22 @@ public sealed class MailKitEmailService(
         if (before is { } b && date >= b)
             return false;
         return true;
+    }
+
+    /// <summary>
+    /// Simulates the list pipeline: IMAP day-window candidates refined by exact INTERNALDATE.
+    /// Used by unit tests (no live IMAP). Missing dates are handled like <see cref="PassesExactTimeFilter"/>.
+    /// </summary>
+    internal static IReadOnlyList<DateTimeOffset?> ApplyListTimeFilters(
+        IEnumerable<DateTimeOffset?> candidateInternalDates,
+        EmailListFilter filter)
+    {
+        if (!NeedsExactTimeFilter(filter))
+            return candidateInternalDates.ToList();
+
+        return candidateInternalDates
+            .Where(d => PassesExactTimeFilter(d, filter.Since, filter.Before))
+            .ToList();
     }
 
     public async Task<EmailContent> GetEmailAsync(
