@@ -172,6 +172,11 @@ public sealed partial class CalDavCalendarService(
         if (ShouldUseIcsFeed(url, opts))
             throw new InvalidOperationException("Cannot add events to a read-only iCalendar (.ics) feed. Configure a CalDAV collection URL instead.");
 
+        if (request.AllDay && request.End.Date <= request.Start.Date)
+            throw new ArgumentException(
+                "All-day end date must be after start date (exclusive DTEND;VALUE=DATE).",
+                nameof(request));
+
         var ics = BuildIcsForNewEvent(
             request.Summary,
             request.Start,
@@ -182,7 +187,8 @@ public sealed partial class CalDavCalendarService(
             request.RecurrenceRule,
             request.RecurrenceFrequency,
             request.RecurrenceCount,
-            request.RecurrenceUntil);
+            request.RecurrenceUntil,
+            request.AllDay);
         var resourceName = Guid.NewGuid().ToString("N") + ".ics";
         var putUrl = CalendarCollectionHelper.EnsureCollectionUrl(url) + resourceName;
 
@@ -202,7 +208,7 @@ public sealed partial class CalDavCalendarService(
         }
 
         logger.LogInformation("Added appointment '{Summary}' to calendar at {Url}", request.Summary, putUrl);
-        return $"Appointment \"{request.Summary}\" added for {request.Start:yyyy-MM-dd HH:mm}–{request.End:HH:mm}.";
+        return $"Appointment \"{request.Summary}\" added for {FormatRangeForMessage(request.Start, request.End, request.AllDay)}.";
     }
 
     private async Task<IReadOnlyList<CalendarCollectionInfo>> DiscoverCalendarsAsync(
@@ -510,11 +516,28 @@ public sealed partial class CalDavCalendarService(
             else if (isRecurring)
                 recurrenceId = startDt;
 
+            var allDay = IsAllDayCalDateTime(startTime) || IsAllDayCalDateTime(evt?.Start);
+            if (allDay)
+            {
+                // Preserve calendar dates (VALUE=DATE) as midnight UTC — do not shift by local offset.
+                startDt = DateTime.SpecifyKind(startTime?.Value.Date ?? startDt.Date, DateTimeKind.Utc);
+                endDt = DateTime.SpecifyKind(
+                    occ.Period?.EndTime?.Value.Date
+                    ?? evt?.End?.Value.Date
+                    ?? endDt.Date,
+                    DateTimeKind.Utc);
+                if (endDt <= startDt && TryGetEventDuration(evt) is { } daySpan && daySpan > TimeSpan.Zero)
+                    endDt = startDt.Add(daySpan);
+                if (endDt <= startDt)
+                    endDt = startDt.AddDays(1);
+            }
+
             list.Add(new CalendarAppointment
             {
                 Summary = evt?.Summary ?? "(no title)",
                 Start = startDt,
                 End = endDt,
+                AllDay = allDay,
                 Location = evt?.Location ?? string.Empty,
                 Description = evt?.Description ?? string.Empty,
                 Uid = evt?.Uid,
@@ -674,6 +697,21 @@ public sealed partial class CalDavCalendarService(
         throw new ArgumentException($"Invalid date-time: '{value}'. Use ISO 8601 (e.g. with +01:00 or Z) or yyyy-MM-dd HH:mm.", paramName);
     }
 
+    /// <summary>
+    /// Parses an all-day calendar date. Accepts only <c>yyyy-MM-dd</c> (rejects times).
+    /// Returns Unspecified midnight of that date.
+    /// </summary>
+    public static DateTime ParseAllDayDate(string value, string paramName = "date")
+    {
+        var v = value.Trim();
+        if (DateTime.TryParseExact(v, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            return DateTime.SpecifyKind(date.Date, DateTimeKind.Unspecified);
+
+        throw new ArgumentException(
+            $"Invalid all-day date: '{value}'. Use yyyy-MM-dd only (no time component).",
+            paramName);
+    }
+
     private static string BuildCalendarQueryXml(DateTime startUtc, DateTime endUtc)
     {
         var startStr = startUtc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
@@ -814,14 +852,26 @@ public sealed partial class CalDavCalendarService(
         string? recurrenceRule = null,
         string? recurrenceFrequency = null,
         int? recurrenceCount = null,
-        DateTime? recurrenceUntil = null)
+        DateTime? recurrenceUntil = null,
+        bool allDay = false)
     {
         var uid = "ironbrain-" + Guid.NewGuid().ToString("N") + "@ironbrain";
-        var effectiveTz = EffectiveTimeZoneId(timeZoneId);
         var calendar = new IcalCalendar();
-        calendar.AddTimeZone(new VTimeZone(effectiveTz));
-        var startCal = new CalDateTime(AsUnspecifiedOrUtc(start), effectiveTz);
-        var endCal = new CalDateTime(AsUnspecifiedOrUtc(end), effectiveTz);
+
+        CalDateTime startCal;
+        CalDateTime endCal;
+        if (allDay)
+        {
+            startCal = ToAllDayCalDateTime(start);
+            endCal = ToAllDayCalDateTime(end);
+        }
+        else
+        {
+            var effectiveTz = EffectiveTimeZoneId(timeZoneId);
+            calendar.AddTimeZone(new VTimeZone(effectiveTz));
+            startCal = new CalDateTime(AsUnspecifiedOrUtc(start), effectiveTz);
+            endCal = new CalDateTime(AsUnspecifiedOrUtc(end), effectiveTz);
+        }
 
         var evt = new CalendarEvent
         {
@@ -841,6 +891,31 @@ public sealed partial class CalDavCalendarService(
         var serializer = new CalendarSerializer();
         var ics = serializer.SerializeToString(calendar);
         return ics ?? throw new InvalidOperationException("Failed to serialize calendar event to ICS.");
+    }
+
+    /// <summary>Builds a date-only <see cref="CalDateTime"/> (<c>VALUE=DATE</c>) from a calendar date.</summary>
+    internal static CalDateTime ToAllDayCalDateTime(DateTime value) =>
+        new(DateOnly.FromDateTime(value));
+
+    internal static bool IsAllDayCalDateTime(CalDateTime? value) =>
+        value is { HasTime: false };
+
+    /// <summary>Formats start/end for user-facing success messages (multi-day keeps both dates).</summary>
+    internal static string FormatRangeForMessage(DateTime start, DateTime end, bool allDay)
+    {
+        if (allDay)
+        {
+            var startDate = DateOnly.FromDateTime(start);
+            var exclusiveEnd = DateOnly.FromDateTime(end);
+            var inclusiveEnd = exclusiveEnd.AddDays(-1);
+            if (inclusiveEnd <= startDate)
+                return $"{startDate:yyyy-MM-dd} (all-day)";
+            return $"{startDate:yyyy-MM-dd} – {inclusiveEnd:yyyy-MM-dd} (all-day)";
+        }
+
+        if (start.Date == end.Date)
+            return $"{start:yyyy-MM-dd HH:mm}–{end:HH:mm}";
+        return $"{start:yyyy-MM-dd HH:mm} – {end:yyyy-MM-dd HH:mm}";
     }
 
     /// <summary>Builds an iCal recurrence pattern from RRULE or simple frequency helpers.</summary>

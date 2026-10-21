@@ -237,28 +237,45 @@ public sealed class MailCalTools(
     }
 
     [McpServerTool(Name = "add_appointment")]
-    [Description("Adds an appointment via CalDAV PUT. Requires calendar (name/id), DefaultWriteCalendar, or calendarUrl when multiple calendars exist. Never writes to all calendars.")]
+    [Description(
+        "Adds an appointment via CalDAV PUT. Requires calendar (name/id), DefaultWriteCalendar, or calendarUrl when multiple calendars exist. Never writes to all calendars. " +
+        "When allDay=true, start/end must be yyyy-MM-dd (no times); end is exclusive (iCal DTEND;VALUE=DATE).")]
     public Task<string> AddAppointmentAsync(
         [Description("Event title")] string summary,
-        [Description("Start ISO 8601 or yyyy-MM-dd HH:mm")] string start,
-        [Description("End, same format as start")] string end,
+        [Description("Start ISO 8601 or yyyy-MM-dd HH:mm (or yyyy-MM-dd when allDay)")] string start,
+        [Description("End, same format as start (exclusive date when allDay)")] string end,
         [Description("Optional location")] string? location = null,
         [Description("Optional description")] string? description = null,
-        [Description("Optional IANA timezone")] string? timeZoneId = null,
+        [Description("Optional IANA timezone (ignored when allDay)")] string? timeZoneId = null,
+        [Description("When true, write DTSTART/DTEND VALUE=DATE; start/end are date-only; end exclusive")] bool allDay = false,
         [Description("Target calendar display name or collection id (required when multiple calendars and no DefaultWriteCalendar)")] string? calendar = null,
         [Description("Optional calendar URL override")] string? calendarUrl = null,
         [Description("Optional account name")] string? account = null,
         CancellationToken cancellationToken = default)
     {
         var (_, cal, _) = Create(account);
+        DateTime startDt;
+        DateTime endDt;
+        if (allDay)
+        {
+            startDt = CalDavCalendarService.ParseAllDayDate(start, nameof(start));
+            endDt = CalDavCalendarService.ParseAllDayDate(end, nameof(end));
+        }
+        else
+        {
+            startDt = CalDavCalendarService.ParseDateTime(start, nameof(start));
+            endDt = CalDavCalendarService.ParseDateTime(end, nameof(end));
+        }
+
         return cal.AddAppointmentAsync(new CalendarAddRequest
         {
             Summary = summary,
-            Start = CalDavCalendarService.ParseDateTime(start, nameof(start)),
-            End = CalDavCalendarService.ParseDateTime(end, nameof(end)),
+            Start = startDt,
+            End = endDt,
             Location = location,
             Description = description,
-            TimeZoneId = timeZoneId,
+            TimeZoneId = allDay ? null : timeZoneId,
+            AllDay = allDay,
             CalendarUrl = calendarUrl,
             CalendarSelector = calendar
         }, userId: null, cancellationToken);
@@ -267,34 +284,53 @@ public sealed class MailCalTools(
     [McpServerTool(Name = "update_appointment")]
     [Description(
         "Partial-update an appointment by uid + calendar (CalDAV PUT with If-Match/ETag; bumps SEQUENCE). " +
-        "Only provided fields change. Pass recurrenceId (occurrence start from list) to update one instance; omit for whole series.")]
+        "Only provided fields change. Pass recurrenceId (occurrence start from list) to update one instance; omit for whole series. " +
+        "Pass allDay=true with date-only start/end (end exclusive) to switch to VALUE=DATE.")]
     public Task<string> UpdateAppointmentAsync(
         [Description("iCalendar UID from get_appointments_*")] string uid,
         [Description("Target calendar display name or collection id")] string? calendar = null,
         [Description("Optional calendar URL override")] string? calendarUrl = null,
         [Description("New title (omit to leave unchanged)")] string? summary = null,
-        [Description("New start ISO 8601 (omit to leave unchanged)")] string? start = null,
-        [Description("New end ISO 8601 (omit to leave unchanged)")] string? end = null,
+        [Description("New start ISO 8601 or yyyy-MM-dd when allDay (omit to leave unchanged)")] string? start = null,
+        [Description("New end ISO 8601 or yyyy-MM-dd when allDay — exclusive (omit to leave unchanged)")] string? end = null,
         [Description("New location (omit to leave unchanged)")] string? location = null,
         [Description("New description (omit to leave unchanged)")] string? description = null,
         [Description("Optional IANA timezone")] string? timeZoneId = null,
+        [Description("When true, VALUE=DATE; when false, timed; omit to leave mode unchanged")] bool? allDay = null,
         [Description("Occurrence start ISO 8601 for single-instance update; omit for whole series")] string? recurrenceId = null,
         [Description("Optional ETag (fetched when omitted)")] string? etag = null,
         [Description("Optional account name")] string? account = null,
         CancellationToken cancellationToken = default)
     {
         var (_, cal, _) = Create(account);
+        DateTime? startDt = null;
+        DateTime? endDt = null;
+        if (!string.IsNullOrWhiteSpace(start))
+        {
+            startDt = allDay == true
+                ? CalDavCalendarService.ParseAllDayDate(start!, nameof(start))
+                : CalDavCalendarService.ParseDateTime(start!, nameof(start));
+        }
+
+        if (!string.IsNullOrWhiteSpace(end))
+        {
+            endDt = allDay == true
+                ? CalDavCalendarService.ParseAllDayDate(end!, nameof(end))
+                : CalDavCalendarService.ParseDateTime(end!, nameof(end));
+        }
+
         return cal.UpdateAppointmentAsync(new CalendarUpdateRequest
         {
             Uid = uid,
             CalendarSelector = calendar,
             CalendarUrl = calendarUrl,
             Summary = summary,
-            Start = string.IsNullOrWhiteSpace(start) ? null : CalDavCalendarService.ParseDateTime(start!, nameof(start)),
-            End = string.IsNullOrWhiteSpace(end) ? null : CalDavCalendarService.ParseDateTime(end!, nameof(end)),
+            Start = startDt,
+            End = endDt,
             Location = location,
             Description = description,
             TimeZoneId = timeZoneId,
+            AllDay = allDay,
             RecurrenceId = string.IsNullOrWhiteSpace(recurrenceId)
                 ? null
                 : CalDavCalendarService.ParseDateTime(recurrenceId!, nameof(recurrenceId)),

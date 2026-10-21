@@ -1,17 +1,23 @@
 namespace Ironbrain.Calendar;
 
 /// <summary>
-/// A single calendar appointment. <see cref="Start"/> and <see cref="End"/> are always in UTC.
+/// A single calendar appointment. <see cref="Start"/> and <see cref="End"/> are always in UTC
+/// (for all-day events: calendar date at midnight UTC; <see cref="End"/> is exclusive per iCal DATE).
 /// </summary>
 public sealed class CalendarAppointment
 {
     public string Summary { get; set; } = string.Empty;
 
-    /// <summary>Start time in UTC.</summary>
+    /// <summary>Start time in UTC (all-day: date at 00:00 UTC).</summary>
     public DateTime Start { get; set; }
 
-    /// <summary>End time in UTC.</summary>
+    /// <summary>End time in UTC (all-day: exclusive end date at 00:00 UTC).</summary>
     public DateTime End { get; set; }
+
+    /// <summary>
+    /// True when the VEVENT uses <c>DTSTART;VALUE=DATE</c> / <c>DTEND;VALUE=DATE</c> (no wall-clock time).
+    /// </summary>
+    public bool AllDay { get; set; }
 
     public string Location { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
@@ -86,8 +92,16 @@ public sealed class CalendarAddRequest
     public string? Description { get; set; }
 
     /// <summary>
+    /// When true, write <c>DTSTART;VALUE=DATE</c> / <c>DTEND;VALUE=DATE</c>.
+    /// <see cref="Start"/>/<see cref="End"/> are calendar dates (<see cref="End"/> exclusive); time-of-day is ignored.
+    /// TimeZoneId is not applied for all-day events.
+    /// </summary>
+    public bool AllDay { get; set; }
+
+    /// <summary>
     /// Optional IANA timezone (e.g. Europe/Berlin). When omitted, defaults to
     /// <see cref="CalDavCalendarService.DefaultTimeZoneId"/> — never floating local time that drops offsets.
+    /// Ignored when <see cref="AllDay"/> is true.
     /// </summary>
     public string? TimeZoneId { get; set; }
 
@@ -151,6 +165,12 @@ public sealed class CalendarUpdateRequest
     public string? Location { get; set; }
     public string? Description { get; set; }
     public string? TimeZoneId { get; set; }
+
+    /// <summary>
+    /// When set, switches the event between timed and all-day (<c>VALUE=DATE</c>).
+    /// Null leaves the existing all-day / timed mode unchanged.
+    /// </summary>
+    public bool? AllDay { get; set; }
 }
 
 /// <summary>

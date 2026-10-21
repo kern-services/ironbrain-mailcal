@@ -332,6 +332,10 @@ public sealed partial class CalDavCalendarService
         if (request.Description is not null)
             evt.Description = request.Description;
 
+        var becomeAllDay = request.AllDay == true
+            || (request.AllDay is null && IsAllDayCalDateTime(evt.Start));
+        var becomeTimed = request.AllDay == false;
+
         // Prefer explicit request TZ; else keep existing event TZ; else default Europe/Berlin — never floating.
         var tz = !string.IsNullOrWhiteSpace(request.TimeZoneId)
             ? request.TimeZoneId.Trim()
@@ -342,15 +346,42 @@ public sealed partial class CalDavCalendarService
         var previousStart = evt.Start;
         var previousEnd = evt.End;
 
-        if (request.Start is { } start)
+        if (becomeAllDay && !becomeTimed)
         {
-            evt.Start = new CalDateTime(AsUnspecifiedOrUtc(start), tz);
+            if (request.Start is { } start)
+                evt.Start = ToAllDayCalDateTime(start);
+            else if (previousStart is not null)
+                evt.Start = ToAllDayCalDateTime(previousStart.Value);
+
+            if (request.End is { } end)
+                evt.End = ToAllDayCalDateTime(end);
+            else if (request.Start is not null && previousStart is not null && previousEnd is not null)
+            {
+                var duration = previousEnd.Value.Date - previousStart.Value.Date;
+                if (duration <= TimeSpan.Zero)
+                    duration = TimeSpan.FromDays(1);
+                evt.End = ToAllDayCalDateTime(evt.Start!.Value.Add(duration));
+            }
+            else if (previousEnd is not null)
+                evt.End = ToAllDayCalDateTime(previousEnd.Value);
+
+            return;
+        }
+
+        if (request.Start is { } timedStart)
+        {
+            evt.Start = new CalDateTime(AsUnspecifiedOrUtc(timedStart), tz);
+            EnsureVTimeZone(evt, tz);
+        }
+        else if (becomeTimed && previousStart is not null)
+        {
+            evt.Start = new CalDateTime(AsUnspecifiedOrUtc(previousStart.Value), tz);
             EnsureVTimeZone(evt, tz);
         }
 
-        if (request.End is { } end)
+        if (request.End is { } timedEnd)
         {
-            evt.End = new CalDateTime(AsUnspecifiedOrUtc(end), tz);
+            evt.End = new CalDateTime(AsUnspecifiedOrUtc(timedEnd), tz);
         }
         else if (request.Start is not null && previousStart is not null && previousEnd is not null)
         {
@@ -360,6 +391,10 @@ public sealed partial class CalDavCalendarService
                 var tzId = evt.Start.TzId ?? tz;
                 evt.End = new CalDateTime(evt.Start.AsUtc.Add(duration), tzId!);
             }
+        }
+        else if (becomeTimed && previousEnd is not null)
+        {
+            evt.End = new CalDateTime(AsUnspecifiedOrUtc(previousEnd.Value), tz);
         }
     }
 
