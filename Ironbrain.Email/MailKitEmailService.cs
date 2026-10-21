@@ -117,7 +117,10 @@ public sealed class MailKitEmailService(
                 var summaries = await inbox.FetchAsync(uids, fetchRequest, timeoutCts.Token)
                     .ConfigureAwait(false);
                 var filtered = summaries
-                    .Where(s => PassesExactTimeFilter(s.InternalDate, filter.Since, filter.Before))
+                    .Where(s => PassesExactTimeFilter(
+                        ResolveListFilterDate(s.InternalDate, s.Envelope?.Date),
+                        filter.Since,
+                        filter.Before))
                     .OrderByDescending(s => s.InternalDate)
                     .ThenByDescending(s => s.UniqueId.Id)
                     .Select(ToEmailSummary)
@@ -237,17 +240,31 @@ public sealed class MailKitEmailService(
         filter.Since.HasValue || filter.Before.HasValue;
 
     /// <summary>
+    /// Resolves the date used for exact since/before filtering: INTERNALDATE, else Envelope.Date.
+    /// Exposed for unit tests.
+    /// </summary>
+    internal static DateTimeOffset? ResolveListFilterDate(
+        DateTimeOffset? internalDate,
+        DateTimeOffset? envelopeDate) =>
+        internalDate ?? envelopeDate;
+
+    /// <summary>
     /// Inclusive <paramref name="since"/> / exclusive <paramref name="before"/> on message date
-    /// (typically IMAP INTERNALDATE). Exposed for unit tests.
-    /// Missing INTERNALDATE (<see langword="null"/>) is treated as <see cref="DateTimeOffset.MinValue"/>:
-    /// it fails any <paramref name="since"/> bound and passes any practical <paramref name="before"/> bound.
+    /// (INTERNALDATE, or Envelope.Date when INTERNALDATE is missing — see
+    /// <see cref="ResolveListFilterDate"/>). Exposed for unit tests.
+    /// When any bound is set and <paramref name="messageDate"/> is still
+    /// <see langword="null"/>, the message does <strong>not</strong> match (unknown date must not
+    /// pass a time filter). With no bounds, returns <see langword="true"/>.
     /// </summary>
     internal static bool PassesExactTimeFilter(
         DateTimeOffset? messageDate,
         DateTimeOffset? since,
         DateTimeOffset? before)
     {
-        var date = messageDate ?? DateTimeOffset.MinValue;
+        if (messageDate is null)
+            return !since.HasValue && !before.HasValue;
+
+        var date = messageDate.Value;
         if (since is { } s && date < s)
             return false;
         if (before is { } b && date >= b)
@@ -256,17 +273,19 @@ public sealed class MailKitEmailService(
     }
 
     /// <summary>
-    /// Simulates the list pipeline: IMAP day-window candidates refined by exact INTERNALDATE.
-    /// Used by unit tests (no live IMAP). Missing dates are handled like <see cref="PassesExactTimeFilter"/>.
+    /// Simulates the list pipeline: IMAP day-window candidates refined by exact date bounds.
+    /// Used by unit tests (no live IMAP). Each candidate is a resolved list-filter date
+    /// (INTERNALDATE or Envelope.Date); <see langword="null"/> means both were missing and is
+    /// excluded whenever <see cref="NeedsExactTimeFilter"/> is true.
     /// </summary>
     internal static IReadOnlyList<DateTimeOffset?> ApplyListTimeFilters(
-        IEnumerable<DateTimeOffset?> candidateInternalDates,
+        IEnumerable<DateTimeOffset?> candidateDates,
         EmailListFilter filter)
     {
         if (!NeedsExactTimeFilter(filter))
-            return candidateInternalDates.ToList();
+            return candidateDates.ToList();
 
-        return candidateInternalDates
+        return candidateDates
             .Where(d => PassesExactTimeFilter(d, filter.Since, filter.Before))
             .ToList();
     }

@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Docs
 
-- Missing INTERNALDATE is treated as `DateTimeOffset.MinValue` in the exact-time filter: excluded by any
-  `since` bound, included by any practical `before` bound (`EmailListFilter` / `PassesExactTimeFilter`).
+- Exact since/before filtering uses INTERNALDATE, falling back to Envelope.Date; if both are missing the
+  message does **not** match any `since` or `before` bound (`EmailListFilter` / `PassesExactTimeFilter`).
 
 ### Tests
 
