@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.12] — 2026-10-21
+
+### Added
+
+- All-day events: `CalendarAddRequest.AllDay` / `CalendarUpdateRequest.AllDay` write
+  `DTSTART;VALUE=DATE` / `DTEND;VALUE=DATE` (exclusive end). `CalendarAppointment.AllDay`
+  is set when listing; start/end are calendar dates at midnight UTC.
+- `CalDavCalendarService.ParseAllDayDate` — accepts `yyyy-MM-dd` only (rejects times).
+- MailCal MCP `add_appointment` / `update_appointment`: optional `allDay` bool.
+
+### Fixed
+
+- Add-appointment success message no longer drops the end date on multi-day ranges
+  (`yyyy-MM-dd HH:mm – yyyy-MM-dd HH:mm` / all-day inclusive display).
+
+### Versions
+
+- **Ironbrain.Email 0.1.12** / **Ironbrain.Calendar 0.1.12** / tools (**Cli** / **Mcp**) **0.1.12**
+
 ## [0.1.11] — 2026-10-21
 
 ### Fixed
