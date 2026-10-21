@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-10-21
+
+### Fixed
+
+- `list_emails` / `ListInboxAsync`: after IMAP calendar-day `SINCE`/`BEFORE`, refine matches by
+  INTERNALDATE so ISO-8601 timestamps work (e.g. `since=2026-10-21T10:40+02:00` excludes 10:27).
+  Inclusive `since` / exclusive `before`; pagination `totalCount` / `nextOffset` use the refined set.
+
+### Tests
+
+- `PassesExactTimeFilter` for same-day earlier exclusion and exclusive `before` bound.
+
+### Versions
+
+- **Ironbrain.Email 0.1.9** / **Ironbrain.Calendar 0.1.9** / tools (**Cli** / **Mcp**) **0.1.9**
+
 ## [0.1.8] — 2026-10-21
 
 ### Changed

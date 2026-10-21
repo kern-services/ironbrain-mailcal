@@ -18,10 +18,16 @@ public sealed class EmailListFilter
     /// <summary>When true, only unseen; when false, only seen; when null, no flag filter.</summary>
     public bool? Unread { get; init; }
 
-    /// <summary>Inclusive lower bound on INTERNALDATE / delivery date (UTC-normalized for SEARCH).</summary>
+    /// <summary>
+    /// Inclusive lower bound on INTERNALDATE / delivery date.
+    /// IMAP SEARCH uses the UTC calendar day; exact time-of-day is applied after fetch.
+    /// </summary>
     public DateTimeOffset? Since { get; init; }
 
-    /// <summary>Exclusive upper bound on INTERNALDATE / delivery date.</summary>
+    /// <summary>
+    /// Exclusive upper bound on INTERNALDATE / delivery date.
+    /// IMAP SEARCH uses the UTC calendar day; exact time-of-day is applied after fetch.
+    /// </summary>
     public DateTimeOffset? Before { get; init; }
 
     /// <summary>Case-insensitive substring match on the From header.</summary>
