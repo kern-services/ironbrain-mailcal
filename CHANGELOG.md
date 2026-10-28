@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.14] — 2026-10-28
+
+### Fixed
+
+- Missing IMAP mailbox no longer surfaces as an unhandled MailKit `FolderNotFoundException`
+  (500). `GetExistingMailboxAsync` throws `MailboxNotFoundException` with
+  `Mailbox '{name}' was not found.`
+- Case-insensitive folder fallback when walking the personal namespace (e.g. `introbox` →
+  `Introbox`) for `list_emails` / `get_email` / move / archive / forward / save-draft
+  source folders.
+
+### Tests
+
+- `ResolveFolderName`: exact match, different-case resolve, truly missing → null;
+  `MailboxNotFoundException` message.
+
+### Versions
+
+- **Ironbrain.Email 0.1.14** / **Ironbrain.Calendar 0.1.14** / tools (**Cli** / **Mcp**) **0.1.14**
+
 ## [0.1.13] — 2026-10-28
 
 ### Fixed
