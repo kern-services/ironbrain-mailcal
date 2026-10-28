@@ -125,4 +125,25 @@ public interface IEmailService
         string? userId = null,
         CancellationToken cancellationToken = default,
         string? accountId = null);
+
+    /// <summary>
+    /// Lists IMAP folders in the personal namespace (plus INBOX), including short/full names,
+    /// hierarchy delimiter, and SPECIAL-USE flags when the server advertises them.
+    /// </summary>
+    /// <param name="accountId">Optional host account id; null → first mail config.</param>
+    Task<IReadOnlyList<MailboxInfo>> ListMailboxesAsync(
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null);
+
+    /// <summary>
+    /// Creates an IMAP mailbox (folder), including nested paths. Idempotent: when the folder
+    /// already exists, returns <see cref="CreateMailboxResult.Created"/> = false.
+    /// </summary>
+    /// <param name="accountId">Optional host account id; null → first mail config.</param>
+    Task<CreateMailboxResult> CreateMailboxAsync(
+        string mailboxPath,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null);
 }

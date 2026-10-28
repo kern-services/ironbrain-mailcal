@@ -739,6 +739,86 @@ public sealed class MailKitEmailService(
             .ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<MailboxInfo>> ListMailboxesAsync(
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null)
+    {
+        var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
+        EnsureImapConfigured(imap);
+
+        using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
+        using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
+
+        var results = new List<MailboxInfo>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (client.Inbox is not null)
+            TryAddMailboxInfo(results, seen, client.Inbox);
+
+        foreach (var ns in client.PersonalNamespaces)
+        {
+            IList<IMailFolder> folders;
+            try
+            {
+                folders = await client
+                    .GetFoldersAsync(ns, StatusItems.None, subscribedOnly: false, timeoutCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (FolderNotFoundException)
+            {
+                continue;
+            }
+
+            foreach (var folder in folders)
+            {
+                if (folder is not null)
+                    TryAddMailboxInfo(results, seen, folder);
+            }
+        }
+
+        await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
+
+        logger.LogDebug("Listed {Count} IMAP mailbox(es)", results.Count);
+        return results;
+    }
+
+    public async Task<CreateMailboxResult> CreateMailboxAsync(
+        string mailboxPath,
+        string? userId = null,
+        CancellationToken cancellationToken = default,
+        string? accountId = null)
+    {
+        if (string.IsNullOrWhiteSpace(mailboxPath))
+            throw new ArgumentException("Mailbox path is required.", nameof(mailboxPath));
+
+        var (_, imap) = await GetOptionsAsync(userId, cancellationToken, accountId).ConfigureAwait(false);
+        EnsureImapConfigured(imap);
+
+        using var timeoutCts = CreateTimeoutCts(imap.TimeoutMs, cancellationToken);
+        using var client = await ConnectImapAsync(imap, timeoutCts.Token).ConfigureAwait(false);
+
+        var (folder, created) = await GetOrCreateMailboxDetailedAsync(client, mailboxPath, timeoutCts.Token)
+            .ConfigureAwait(false);
+        var delimiter = folder.DirectorySeparator == '\0'
+            ? "/"
+            : folder.DirectorySeparator.ToString();
+
+        await client.DisconnectAsync(true, timeoutCts.Token).ConfigureAwait(false);
+
+        logger.LogInformation(
+            "Mailbox {FullName} {Outcome}",
+            folder.FullName,
+            created ? "created" : "already existed");
+
+        return new CreateMailboxResult
+        {
+            FullName = folder.FullName,
+            Delimiter = delimiter,
+            Created = created
+        };
+    }
+
     private async Task SendMimeMessageAsync(
         SmtpOptions smtp,
         ImapOptions imap,
@@ -1102,13 +1182,31 @@ public sealed class MailKitEmailService(
     /// <summary>
     /// Resolves an existing mailbox or creates the hierarchy under the personal namespace when allowed.
     /// </summary>
-    internal static async Task<IMailFolder> GetOrCreateMailboxAsync(ImapClient client, string mailboxPath, CancellationToken cancellationToken)
+    internal static async Task<IMailFolder> GetOrCreateMailboxAsync(
+        ImapClient client,
+        string mailboxPath,
+        CancellationToken cancellationToken)
+    {
+        var (folder, _) = await GetOrCreateMailboxDetailedAsync(client, mailboxPath, cancellationToken)
+            .ConfigureAwait(false);
+        return folder;
+    }
+
+    /// <summary>
+    /// Same as <see cref="GetOrCreateMailboxAsync"/> but reports whether any path segment was created.
+    /// </summary>
+    internal static async Task<(IMailFolder Folder, bool Created)> GetOrCreateMailboxDetailedAsync(
+        ImapClient client,
+        string mailboxPath,
+        CancellationToken cancellationToken)
     {
         var normalized = NormalizeMailboxPath(mailboxPath);
 
         try
         {
-            return await GetExistingMailboxAsync(client, normalized, cancellationToken).ConfigureAwait(false);
+            var existing = await GetExistingMailboxAsync(client, normalized, cancellationToken)
+                .ConfigureAwait(false);
+            return (existing, false);
         }
         catch (MailboxNotFoundException)
         {
@@ -1134,6 +1232,7 @@ public sealed class MailKitEmailService(
             throw new InvalidOperationException($"Invalid mailbox path '{mailboxPath}'.");
 
         IMailFolder current = root;
+        var createdAny = false;
         for (var i = 0; i < parts.Length; i++)
         {
             var segment = parts[i];
@@ -1153,6 +1252,7 @@ public sealed class MailKitEmailService(
                         .ConfigureAwait(false);
                     current = created ?? throw new InvalidOperationException(
                         $"Mailbox '{normalized}' create returned no folder at segment '{segment}'.");
+                    createdAny = true;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException and not InvalidOperationException)
                 {
@@ -1164,7 +1264,61 @@ public sealed class MailKitEmailService(
             }
         }
 
-        return current;
+        return (current, createdAny);
+    }
+
+    /// <summary>Maps MailKit folder attributes to IMAP SPECIAL-USE flag strings.</summary>
+    internal static IReadOnlyList<string> MapSpecialUseFlags(FolderAttributes attributes)
+    {
+        var flags = new List<string>(4);
+        if (attributes.HasFlag(FolderAttributes.Inbox))
+            flags.Add(@"\Inbox");
+        if (attributes.HasFlag(FolderAttributes.Drafts))
+            flags.Add(@"\Drafts");
+        if (attributes.HasFlag(FolderAttributes.Sent))
+            flags.Add(@"\Sent");
+        if (attributes.HasFlag(FolderAttributes.Junk))
+            flags.Add(@"\Junk");
+        if (attributes.HasFlag(FolderAttributes.Trash))
+            flags.Add(@"\Trash");
+        if (attributes.HasFlag(FolderAttributes.Archive))
+            flags.Add(@"\Archive");
+        if (attributes.HasFlag(FolderAttributes.All))
+            flags.Add(@"\All");
+        if (attributes.HasFlag(FolderAttributes.Flagged))
+            flags.Add(@"\Flagged");
+        if (attributes.HasFlag(FolderAttributes.Important))
+            flags.Add(@"\Important");
+        return flags;
+    }
+
+    internal static MailboxInfo ToMailboxInfo(IMailFolder folder)
+    {
+        var delimiter = folder.DirectorySeparator == '\0'
+            ? "/"
+            : folder.DirectorySeparator.ToString();
+        var attrs = folder.Attributes;
+        return new MailboxInfo
+        {
+            Name = folder.Name,
+            FullName = folder.FullName,
+            Delimiter = delimiter,
+            SpecialUseFlags = MapSpecialUseFlags(attrs),
+            CanSelect = !attrs.HasFlag(FolderAttributes.NoSelect),
+            HasChildren = attrs.HasFlag(FolderAttributes.HasChildren)
+        };
+    }
+
+    private static void TryAddMailboxInfo(
+        List<MailboxInfo> results,
+        HashSet<string> seen,
+        IMailFolder folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder.FullName))
+            return;
+        if (!seen.Add(folder.FullName))
+            return;
+        results.Add(ToMailboxInfo(folder));
     }
 
     public static UniqueId ParseUid(string id)

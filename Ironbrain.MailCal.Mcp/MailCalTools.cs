@@ -40,6 +40,44 @@ public sealed class MailCalTools(
         return JsonSerializer.Serialize(items, JsonOptions);
     }
 
+    [McpServerTool(Name = "list_mailboxes")]
+    [Description(
+        "Lists IMAP folders (personal namespace + INBOX) with name, fullName, delimiter, " +
+        "specialUseFlags (\\Inbox, \\Drafts, \\Sent, \\Junk, \\Trash, \\Archive, …), canSelect, hasChildren.")]
+    public async Task<string> ListMailboxesAsync(
+        [Description("Optional account name; defaultAccount / IRONBRAIN_MAILCAL_ACCOUNT / sole account if omitted")]
+        string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (email, _, _) = Create(account);
+        var mailboxes = await email
+            .ListMailboxesAsync(userId: null, cancellationToken)
+            .ConfigureAwait(false);
+        return JsonSerializer.Serialize(mailboxes, JsonOptions);
+    }
+
+    [McpServerTool(Name = "create_mailbox")]
+    [Description(
+        "Creates an IMAP folder (nested paths allowed). Idempotent: when the folder already exists, " +
+        "returns created=false with the resolved fullName.")]
+    public async Task<string> CreateMailboxAsync(
+        [Description("IMAP folder path to create (e.g. Projects/Foo or Archive/2026)")] string path,
+        [Description("Optional account name")] string? account = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (email, _, resolved) = Create(account);
+        var result = await email
+            .CreateMailboxAsync(path, userId: null, cancellationToken)
+            .ConfigureAwait(false);
+        return JsonSerializer.Serialize(new
+        {
+            result.FullName,
+            result.Delimiter,
+            result.Created,
+            account = resolved.Name
+        }, JsonOptions);
+    }
+
     [McpServerTool(Name = "list_emails")]
     [Description(
         "Lists emails from the selected account's IMAP mailbox with optional server-side filters. " +
