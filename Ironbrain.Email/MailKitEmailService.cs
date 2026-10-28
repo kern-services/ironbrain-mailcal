@@ -367,7 +367,7 @@ public sealed class MailKitEmailService(
                 sourceFolder = await GetExistingMailboxAsync(client, replySourceFolder, timeoutCts.Token)
                     .ConfigureAwait(false);
             }
-            catch (FolderNotFoundException ex)
+            catch (Exception ex) when (ex is MailboxNotFoundException or FolderNotFoundException)
             {
                 throw new InvalidOperationException(
                     FormatFolderNotFound(replySourceFolder, imap, accountId, "SaveDraft reply source"),
@@ -484,7 +484,7 @@ public sealed class MailKitEmailService(
         {
             folder = await GetExistingMailboxAsync(imapClient, folderName, imapTimeoutCts.Token).ConfigureAwait(false);
         }
-        catch (FolderNotFoundException ex)
+        catch (Exception ex) when (ex is MailboxNotFoundException or FolderNotFoundException)
         {
             throw new InvalidOperationException(
                 FormatFolderNotFound(
@@ -948,9 +948,9 @@ public sealed class MailKitEmailService(
     }
 
     /// <summary>
-    /// Opens an existing mailbox with separator-tolerant lookup (no create).
+    /// Opens an existing mailbox with separator-tolerant and case-insensitive lookup (no create).
     /// Tries the path as given, then with <c>/</c>↔<c>.</c> alternates, then walks the
-    /// personal namespace using the server directory separator.
+    /// personal namespace using the server directory separator (exact segment, then ignore-case).
     /// </summary>
     internal static async Task<IMailFolder> GetExistingMailboxAsync(
         ImapClient client,
@@ -978,7 +978,7 @@ public sealed class MailKitEmailService(
                 return walked;
         }
 
-        throw new FolderNotFoundException(normalized);
+        throw new MailboxNotFoundException(normalized);
     }
 
     internal static string NormalizeMailboxPath(string mailboxPath)
@@ -1024,20 +1024,79 @@ public sealed class MailKitEmailService(
         {
             if (segment is "." or ".." || segment.Contains("..", StringComparison.Ordinal))
                 return null;
-            try
-            {
-                var existing = await current.GetSubfolderAsync(segment, cancellationToken).ConfigureAwait(false);
-                if (existing is null)
-                    return null;
-                current = existing;
-            }
-            catch (FolderNotFoundException)
-            {
+
+            var existing = await GetSubfolderExactOrIgnoreCaseAsync(current, segment, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
                 return null;
-            }
+            current = existing;
         }
 
         return current;
+    }
+
+    /// <summary>
+    /// Resolves a child folder by exact name, then case-insensitive fallback among siblings.
+    /// When several ignore-case matches exist, prefers an Ordinal exact name, else the first match.
+    /// </summary>
+    internal static async Task<IMailFolder?> GetSubfolderExactOrIgnoreCaseAsync(
+        IMailFolder parent,
+        string segment,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var exact = await parent.GetSubfolderAsync(segment, cancellationToken).ConfigureAwait(false);
+            if (exact is not null)
+                return exact;
+        }
+        catch (FolderNotFoundException)
+        {
+            // fall through to ignore-case sibling scan
+        }
+
+        IList<IMailFolder> children;
+        try
+        {
+            children = await parent.GetSubfoldersAsync(false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (FolderNotFoundException)
+        {
+            return null;
+        }
+
+        return FindFolderByName(children, segment);
+    }
+
+    /// <summary>
+    /// Resolves a folder name among siblings: Ordinal exact first, else OrdinalIgnoreCase
+    /// (first match when several differ only by case).
+    /// </summary>
+    internal static string? ResolveFolderName(IEnumerable<string> names, string segment)
+    {
+        string? ignoreCaseMatch = null;
+        foreach (var name in names)
+        {
+            if (string.Equals(name, segment, StringComparison.Ordinal))
+                return name;
+            if (ignoreCaseMatch is null
+                && string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
+                ignoreCaseMatch = name;
+        }
+
+        return ignoreCaseMatch;
+    }
+
+    /// <summary>
+    /// Picks a folder whose <see cref="IMailFolder.Name"/> matches <paramref name="segment"/>
+    /// using <see cref="ResolveFolderName"/>.
+    /// </summary>
+    internal static IMailFolder? FindFolderByName(IEnumerable<IMailFolder> folders, string segment)
+    {
+        var resolved = ResolveFolderName(folders.Select(f => f.Name), segment);
+        if (resolved is null)
+            return null;
+        return folders.FirstOrDefault(f => string.Equals(f.Name, resolved, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1051,9 +1110,13 @@ public sealed class MailKitEmailService(
         {
             return await GetExistingMailboxAsync(client, normalized, cancellationToken).ConfigureAwait(false);
         }
-        catch (FolderNotFoundException)
+        catch (MailboxNotFoundException)
         {
             // create hierarchy below
+        }
+        catch (FolderNotFoundException)
+        {
+            // create hierarchy below (defensive; GetExistingMailboxAsync throws MailboxNotFoundException)
         }
 
         if (client.PersonalNamespaces.Count == 0)
@@ -1256,7 +1319,7 @@ public sealed class MailKitEmailService(
                 if (existing is not null && !string.IsNullOrWhiteSpace(existing.FullName))
                     return existing.FullName;
             }
-            catch (FolderNotFoundException)
+            catch (Exception ex) when (ex is MailboxNotFoundException or FolderNotFoundException)
             {
                 // try next
             }

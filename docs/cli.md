@@ -116,6 +116,11 @@ ironbrain-mailcal account show assistant
 ```bash
 ironbrain-mailcal --account assistant mail list [--limit 20] [--offset 0] [--mailbox INBOX]
 ironbrain-mailcal -a privat mail get <imap-unique-id>
+```
+
+Mailbox/folder overrides are matched with separator tolerance (`/`↔`.`) and a **case-insensitive** fallback (e.g. `introbox` → `Introbox`). A truly missing mailbox fails with a clear `Mailbox '…' was not found.` error (not an unhandled IMAP folder exception).
+
+```bash
 ironbrain-mailcal mail send --to a@b.com --subject "Hi" --body "Hello"
 ironbrain-mailcal mail send --to a@b.com --subject "Hi" --body-file ./msg.txt
 ironbrain-mailcal mail reply <imap-unique-id> --body "Thanks"
