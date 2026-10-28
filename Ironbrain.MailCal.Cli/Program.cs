@@ -409,18 +409,32 @@ calAdd.SetAction(async (parseResult, ct) =>
         var allDay = parseResult.GetValue(allDayOpt);
         var startRaw = parseResult.GetValue(startOpt)!;
         var endRaw = parseResult.GetValue(endOpt)!;
+        var tzId = allDay ? null : parseResult.GetValue(tzOpt);
+        DateTime startDt;
+        DateTime endDt;
+        if (allDay)
+        {
+            startDt = CalDavCalendarService.ParseAllDayDate(startRaw, "start");
+            endDt = CalDavCalendarService.ParseAllDayDate(endRaw, "end");
+        }
+        else
+        {
+            var startDto = CalDavCalendarService.ParseEventDateTimeOffset(startRaw, tzId, "start");
+            var endDto = CalDavCalendarService.ParseEventDateTimeOffset(endRaw, tzId, "end");
+            var resolved = CalDavCalendarService.ResolveEventDateTimes(startDto, endDto, tzId);
+            startDt = resolved.StartLocal;
+            endDt = resolved.EndLocal;
+            tzId = resolved.TimeZoneId;
+        }
+
         var result = await calendar.AddAppointmentAsync(new CalendarAddRequest
         {
             Summary = parseResult.GetValue(summaryOpt)!,
-            Start = allDay
-                ? CalDavCalendarService.ParseAllDayDate(startRaw, "start")
-                : CalDavCalendarService.ParseDateTime(startRaw, "start"),
-            End = allDay
-                ? CalDavCalendarService.ParseAllDayDate(endRaw, "end")
-                : CalDavCalendarService.ParseDateTime(endRaw, "end"),
+            Start = startDt,
+            End = endDt,
             Location = parseResult.GetValue(locationOpt),
             Description = parseResult.GetValue(descOpt),
-            TimeZoneId = allDay ? null : parseResult.GetValue(tzOpt),
+            TimeZoneId = tzId,
             AllDay = allDay,
             CalendarUrl = parseResult.GetValue(calUrlOpt),
             CalendarSelector = parseResult.GetValue(writeCalendarOpt)
@@ -467,25 +481,43 @@ calUpdate.SetAction(async (parseResult, ct) =>
         var allDay = parseResult.GetValue(allDayOpt);
         // --all-day flag on update: true switches to VALUE=DATE; omit keeps mode (pass false via env not supported — use MCP for timed conversion)
         bool? allDayMode = allDay ? true : null;
+        var tzId = parseResult.GetValue(tzOpt);
+        DateTime? startDt = null;
+        DateTime? endDt = null;
+        if (allDay)
+        {
+            if (!string.IsNullOrWhiteSpace(startRaw))
+                startDt = CalDavCalendarService.ParseAllDayDate(startRaw!, "start");
+            if (!string.IsNullOrWhiteSpace(endRaw))
+                endDt = CalDavCalendarService.ParseAllDayDate(endRaw!, "end");
+        }
+        else if (!string.IsNullOrWhiteSpace(startRaw) || !string.IsNullOrWhiteSpace(endRaw))
+        {
+            var startDto = !string.IsNullOrWhiteSpace(startRaw)
+                ? CalDavCalendarService.ParseEventDateTimeOffset(startRaw!, tzId, "start")
+                : CalDavCalendarService.ParseEventDateTimeOffset(endRaw!, tzId, "end");
+            var endDto = !string.IsNullOrWhiteSpace(endRaw)
+                ? CalDavCalendarService.ParseEventDateTimeOffset(endRaw!, tzId, "end")
+                : startDto;
+            var resolved = CalDavCalendarService.ResolveEventDateTimes(startDto, endDto, tzId);
+            tzId = resolved.TimeZoneId;
+            if (!string.IsNullOrWhiteSpace(startRaw))
+                startDt = resolved.StartLocal;
+            if (!string.IsNullOrWhiteSpace(endRaw))
+                endDt = resolved.EndLocal;
+        }
+
         var result = await calendar.UpdateAppointmentAsync(new CalendarUpdateRequest
         {
             Uid = parseResult.GetValue(uidOpt)!,
             CalendarSelector = parseResult.GetValue(writeCalendarOpt),
             CalendarUrl = parseResult.GetValue(calUrlOpt),
             Summary = string.IsNullOrWhiteSpace(summary) ? null : summary,
-            Start = string.IsNullOrWhiteSpace(startRaw)
-                ? null
-                : allDay
-                    ? CalDavCalendarService.ParseAllDayDate(startRaw!, "start")
-                    : CalDavCalendarService.ParseDateTime(startRaw!, "start"),
-            End = string.IsNullOrWhiteSpace(endRaw)
-                ? null
-                : allDay
-                    ? CalDavCalendarService.ParseAllDayDate(endRaw!, "end")
-                    : CalDavCalendarService.ParseDateTime(endRaw!, "end"),
+            Start = startDt,
+            End = endDt,
             Location = parseResult.GetValue(locationOpt),
             Description = parseResult.GetValue(descOpt),
-            TimeZoneId = parseResult.GetValue(tzOpt),
+            TimeZoneId = tzId,
             AllDay = allDayMode,
             RecurrenceId = string.IsNullOrWhiteSpace(ridRaw) ? null : CalDavCalendarService.ParseDateTime(ridRaw!, "recurrence-id"),
             ETag = parseResult.GetValue(etagOpt)

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.13] — 2026-10-28
+
+### Fixed
+
+- Offset-less event start/end strings are interpreted as wall-clock local time in `timeZoneId`
+  (default **Europe/Berlin**). `DateTimeOffset.Parse` / JSON previously attached `+00:00` on UTC hosts,
+  so `ResolveEventDateTimes` shifted Europe/Berlin times by one hour.
+- New `TryParseEventDateTimeOffset` / `ParseEventDateTimeOffset` / `HasExplicitTimeZoneOffset`.
+  MailCal MCP `add_appointment` / `update_appointment` use them before resolving local times.
+- Explicit offsets and `Z` still convert to the event time zone (absolute instant preserved).
+
+### Versions
+
+- **Ironbrain.Email 0.1.13** / **Ironbrain.Calendar 0.1.13** / tools (**Cli** / **Mcp**) **0.1.13**
+
 ## [0.1.12] — 2026-10-21
 
 ### Added
