@@ -192,4 +192,43 @@ public sealed class EmailSaveDraftResult
     public required string Subject { get; set; }
 }
 
+/// <summary>One IMAP folder from <see cref="IEmailService.ListMailboxesAsync"/>.</summary>
+public sealed class MailboxInfo
+{
+    /// <summary>Leaf folder name (last path segment).</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Full folder path as reported by the server.</summary>
+    public required string FullName { get; init; }
+
+    /// <summary>Hierarchy delimiter (usually <c>/</c> or <c>.</c>).</summary>
+    public required string Delimiter { get; init; }
+
+    /// <summary>
+    /// SPECIAL-USE / role flags when known (e.g. <c>\Inbox</c>, <c>\Drafts</c>, <c>\Sent</c>,
+    /// <c>\Junk</c>, <c>\Trash</c>, <c>\Archive</c>, <c>\All</c>, <c>\Flagged</c>, <c>\Important</c>).
+    /// Empty when the server does not advertise a role for this folder.
+    /// </summary>
+    public IReadOnlyList<string> SpecialUseFlags { get; init; } = [];
+
+    /// <summary>True when the folder can hold messages (not <c>\Noselect</c>).</summary>
+    public bool CanSelect { get; init; } = true;
+
+    /// <summary>True when the folder may have children (<c>\HasChildren</c>).</summary>
+    public bool HasChildren { get; init; }
+}
+
+/// <summary>Result of <see cref="IEmailService.CreateMailboxAsync"/>.</summary>
+public sealed class CreateMailboxResult
+{
+    /// <summary>Full folder path after create / resolve.</summary>
+    public required string FullName { get; init; }
+
+    /// <summary>Hierarchy delimiter used for this mailbox.</summary>
+    public required string Delimiter { get; init; }
+
+    /// <summary>True when at least one path segment was created; false when the folder already existed.</summary>
+    public required bool Created { get; init; }
+}
+
 

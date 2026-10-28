@@ -247,6 +247,43 @@ mailReply.SetAction(async (parseResult, ct) =>
 });
 mail.Subcommands.Add(mailReply);
 
+var mailListMailboxes = new Command("mailboxes", "List IMAP folders (name, fullName, delimiter, specialUseFlags)");
+mailListMailboxes.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (email, _, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt: null);
+        var mailboxes = await email.ListMailboxesAsync(userId: null, ct);
+        ConfigLoader.WriteJson(new { account = account.Name, mailboxes });
+    }
+});
+mail.Subcommands.Add(mailListMailboxes);
+
+var createMailboxPathArg = new Argument<string>("path")
+{
+    Description = "IMAP folder path to create (nested OK; idempotent if it exists)"
+};
+var mailCreateMailbox = new Command("create-mailbox", "Create an IMAP folder (nested paths allowed; idempotent)");
+mailCreateMailbox.Arguments.Add(createMailboxPathArg);
+mailCreateMailbox.SetAction(async (parseResult, ct) =>
+{
+    var (sp, catalog, configuration) = Open(parseResult);
+    await using (sp)
+    {
+        var (email, _, account) = CreateClients(sp, catalog, configuration, parseResult, mailboxOpt: null);
+        var result = await email.CreateMailboxAsync(parseResult.GetValue(createMailboxPathArg)!, userId: null, ct);
+        ConfigLoader.WriteJson(new
+        {
+            result.FullName,
+            result.Delimiter,
+            result.Created,
+            account = account.Name
+        });
+    }
+});
+mail.Subcommands.Add(mailCreateMailbox);
+
 var moveUidArg = new Argument<string>("uid") { Description = "IMAP unique id (UID) of the message to move" };
 var moveToOpt = new Option<string>("--to") { Description = "Destination IMAP mailbox (e.g. Archive/2026)" };
 moveToOpt.Validators.Add(r => { if (string.IsNullOrWhiteSpace(r.GetValueOrDefault<string>())) r.AddError("--to is required"); });

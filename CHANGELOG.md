@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.15] — 2026-10-28
+
+### Added
+
+- **`IEmailService.ListMailboxesAsync`** — read-only IMAP folder list (personal namespace + INBOX)
+  with `name`, `fullName`, `delimiter`, SPECIAL-USE flags (`\Inbox`, `\Drafts`, `\Sent`, `\Junk`,
+  `\Trash`, `\Archive`, …), `canSelect`, `hasChildren`.
+- **`IEmailService.CreateMailboxAsync`** — creates IMAP folders (nested paths allowed); idempotent
+  when the folder already exists (`created=false`).
+- MailCal MCP: `list_mailboxes`, `create_mailbox`.
+- CLI: `mail mailboxes`, `mail create-mailbox <path>`.
+
+### Tests
+
+- `MapSpecialUseFlags` covers Inbox/Trash, empty, and all role flags; mailbox model smoke tests.
+
+### Versions
+
+- **Ironbrain.Email 0.1.15** / **Ironbrain.Calendar 0.1.15** / tools (**Cli** / **Mcp**) **0.1.15**
+
 ## [0.1.14] — 2026-10-28
 
 ### Fixed
