@@ -683,9 +683,8 @@ public sealed partial class CalDavCalendarService(
     public static DateTime ParseDateTime(string value, string paramName = "dateTime")
     {
         var v = value.Trim();
-        var hasOffset = v.Contains('Z', StringComparison.OrdinalIgnoreCase) || v.Contains('+', StringComparison.Ordinal)
-            || (v.Length >= 7 && v[^7] == '-' && char.IsDigit(v[^5]));
-        if (hasOffset && DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
+        if (HasExplicitTimeZoneOffset(v)
+            && DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dto))
             return dto.UtcDateTime;
 
         if (DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal | DateTimeStyles.AllowWhiteSpaces, out var dt))
@@ -695,6 +694,114 @@ public sealed partial class CalDavCalendarService(
         if (DateTime.TryParseExact(v, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out dt))
             return dt;
         throw new ArgumentException($"Invalid date-time: '{value}'. Use ISO 8601 (e.g. with +01:00 or Z) or yyyy-MM-dd HH:mm.", paramName);
+    }
+
+    /// <summary>
+    /// True when <paramref name="value"/> includes an explicit offset (<c>Z</c>, <c>+hh:mm</c>, or <c>-hh:mm</c>).
+    /// Date separators in <c>yyyy-MM-dd</c> are not treated as offsets.
+    /// </summary>
+    public static bool HasExplicitTimeZoneOffset(string value)
+    {
+        var v = value.Trim();
+        if (v.Length == 0)
+            return false;
+        if (v.EndsWith('Z') || v.EndsWith('z'))
+            return true;
+
+        // Offset only appears in the time portion (after T) or after a space-separated time.
+        var t = v.IndexOf('T');
+        var timePart = t >= 0 ? v[(t + 1)..] : (v.Contains(' ') ? v[(v.IndexOf(' ') + 1)..] : null);
+        if (timePart is null)
+            return false;
+
+        if (timePart.Contains('+', StringComparison.Ordinal))
+            return true;
+
+        // Negative offset: …HH:mm:ss[.fff]-HH:mm (dash after a digit, not a date separator).
+        for (var i = 1; i < timePart.Length; i++)
+        {
+            if (timePart[i] == '-' && char.IsDigit(timePart[i - 1]))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Parses an event start/end for add/update.
+    /// Offset-less values are wall-clock local time in <paramref name="timeZoneId"/>
+    /// (default <see cref="DefaultTimeZoneId"/>). Explicit offsets / <c>Z</c> keep their absolute instant.
+    /// </summary>
+    public static bool TryParseEventDateTimeOffset(string value, string? timeZoneId, out DateTimeOffset result)
+    {
+        result = default;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var v = value.Trim();
+        if (HasExplicitTimeZoneOffset(v))
+            return DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out result);
+
+        if (!TryParseOffsetLessLocalDateTime(v, out var local))
+            return false;
+
+        var tz = ResolveTimeZoneInfo(EffectiveTimeZoneId(timeZoneId));
+        if (tz.IsInvalidTime(local))
+        {
+            // Spring-forward gap: advance to the next valid local minute.
+            local = local.AddMinutes(1);
+            while (tz.IsInvalidTime(local))
+                local = local.AddMinutes(1);
+        }
+
+        var offset = tz.IsAmbiguousTime(local)
+            ? tz.GetAmbiguousTimeOffsets(local)[0]
+            : tz.GetUtcOffset(local);
+        result = new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), offset);
+        return true;
+    }
+
+    /// <summary>
+    /// Parses an event start/end; throws when invalid. See <see cref="TryParseEventDateTimeOffset"/>.
+    /// </summary>
+    public static DateTimeOffset ParseEventDateTimeOffset(
+        string value,
+        string? timeZoneId = null,
+        string paramName = "dateTime")
+    {
+        if (TryParseEventDateTimeOffset(value, timeZoneId, out var result))
+            return result;
+        throw new ArgumentException(
+            $"Invalid date-time: '{value}'. Use ISO 8601 with offset/Z, or an offset-less local time for the event time zone.",
+            paramName);
+    }
+
+    private static bool TryParseOffsetLessLocalDateTime(string value, out DateTime local)
+    {
+        if (DateTime.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.NoCurrentDateDefault,
+                out local)
+            && local != DateTime.MinValue)
+        {
+            local = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+            return true;
+        }
+
+        if (DateTime.TryParseExact(
+                value,
+                ["yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm"],
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out local))
+        {
+            local = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+            return true;
+        }
+
+        local = default;
+        return false;
     }
 
     /// <summary>
@@ -796,8 +903,11 @@ public sealed partial class CalDavCalendarService(
     public const string DefaultTimeZoneId = "Europe/Berlin";
 
     /// <summary>
-    /// Resolves wall-clock times + effective TZ for add/update. Never drops a DateTimeOffset into floating time.
-    /// When <paramref name="timeZoneId"/> is null/empty, uses <see cref="DefaultTimeZoneId"/>.
+    /// Resolves wall-clock times + effective TZ for add/update from absolute <see cref="DateTimeOffset"/> instants.
+    /// Converts each instant into <paramref name="timeZoneId"/> (default <see cref="DefaultTimeZoneId"/>).
+    /// Callers that accept offset-less ISO strings must parse them with
+    /// <see cref="TryParseEventDateTimeOffset"/> first — otherwise <c>DateTimeOffset.Parse</c> /
+    /// JSON often attaches <c>+00:00</c> and this conversion shifts the wall clock.
     /// </summary>
     public static (DateTime StartLocal, DateTime EndLocal, string TimeZoneId) ResolveEventDateTimes(
         DateTimeOffset start,

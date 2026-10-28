@@ -263,8 +263,12 @@ public sealed class MailCalTools(
         }
         else
         {
-            startDt = CalDavCalendarService.ParseDateTime(start, nameof(start));
-            endDt = CalDavCalendarService.ParseDateTime(end, nameof(end));
+            var startDto = CalDavCalendarService.ParseEventDateTimeOffset(start, timeZoneId, nameof(start));
+            var endDto = CalDavCalendarService.ParseEventDateTimeOffset(end, timeZoneId, nameof(end));
+            var resolved = CalDavCalendarService.ResolveEventDateTimes(startDto, endDto, timeZoneId);
+            startDt = resolved.StartLocal;
+            endDt = resolved.EndLocal;
+            timeZoneId = resolved.TimeZoneId;
         }
 
         return cal.AddAppointmentAsync(new CalendarAddRequest
@@ -305,18 +309,27 @@ public sealed class MailCalTools(
         var (_, cal, _) = Create(account);
         DateTime? startDt = null;
         DateTime? endDt = null;
-        if (!string.IsNullOrWhiteSpace(start))
+        if (allDay == true)
         {
-            startDt = allDay == true
-                ? CalDavCalendarService.ParseAllDayDate(start!, nameof(start))
-                : CalDavCalendarService.ParseDateTime(start!, nameof(start));
+            if (!string.IsNullOrWhiteSpace(start))
+                startDt = CalDavCalendarService.ParseAllDayDate(start!, nameof(start));
+            if (!string.IsNullOrWhiteSpace(end))
+                endDt = CalDavCalendarService.ParseAllDayDate(end!, nameof(end));
         }
-
-        if (!string.IsNullOrWhiteSpace(end))
+        else if (!string.IsNullOrWhiteSpace(start) || !string.IsNullOrWhiteSpace(end))
         {
-            endDt = allDay == true
-                ? CalDavCalendarService.ParseAllDayDate(end!, nameof(end))
-                : CalDavCalendarService.ParseDateTime(end!, nameof(end));
+            var startDto = !string.IsNullOrWhiteSpace(start)
+                ? CalDavCalendarService.ParseEventDateTimeOffset(start!, timeZoneId, nameof(start))
+                : CalDavCalendarService.ParseEventDateTimeOffset(end!, timeZoneId, nameof(end));
+            var endDto = !string.IsNullOrWhiteSpace(end)
+                ? CalDavCalendarService.ParseEventDateTimeOffset(end!, timeZoneId, nameof(end))
+                : startDto;
+            var resolved = CalDavCalendarService.ResolveEventDateTimes(startDto, endDto, timeZoneId);
+            timeZoneId = resolved.TimeZoneId;
+            if (!string.IsNullOrWhiteSpace(start))
+                startDt = resolved.StartLocal;
+            if (!string.IsNullOrWhiteSpace(end))
+                endDt = resolved.EndLocal;
         }
 
         return cal.UpdateAppointmentAsync(new CalendarUpdateRequest
